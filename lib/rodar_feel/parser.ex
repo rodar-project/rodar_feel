@@ -117,6 +117,20 @@ defmodule RodarFeel.Parser do
     |> ascii_string([?a..?z, ?A..?Z, ?0..?9, ?_], min: 0)
     |> reduce(:build_identifier)
 
+  # Temporal literal: @"..." with optional path suffixes (e.g. @"2024-03-20".year)
+  temporal_literal =
+    ignore(string("@\""))
+    |> repeat(utf8_char(not: ?"))
+    |> ignore(ascii_char([?"]))
+    |> reduce(:build_temporal)
+    |> optional(
+      repeat(
+        ignore(ascii_char([?.]))
+        |> concat(identifier)
+      )
+    )
+    |> reduce(:build_temporal_with_path)
+
   # --- Multi-word function names ---
   multiword_funcall =
     choice([
@@ -130,7 +144,8 @@ defmodule RodarFeel.Parser do
       string("is null") |> concat(word_boundary),
       string("distinct values") |> concat(word_boundary),
       string("list contains") |> concat(word_boundary),
-      string("index of") |> concat(word_boundary)
+      string("index of") |> concat(word_boundary),
+      string("date and time") |> concat(word_boundary)
     ])
     |> ignore(ws)
     |> ignore(ascii_char([?(]))
@@ -308,6 +323,7 @@ defmodule RodarFeel.Parser do
       for_expr,
       some_expr,
       every_expr,
+      temporal_literal,
       number_literal |> reduce(:wrap_literal),
       string_literal |> reduce(:wrap_literal),
       list_literal,
@@ -563,6 +579,19 @@ defmodule RodarFeel.Parser do
   defp finalize_path([], nil), do: {:path, []}
   defp finalize_path(segments, nil), do: {:path, segments}
   defp finalize_path(_segments, result), do: result
+
+  @doc false
+  def build_temporal(chars) do
+    str = List.to_string(chars)
+    {:temporal, str}
+  end
+
+  @doc false
+  def build_temporal_with_path([{:temporal, _} = temporal]), do: temporal
+
+  def build_temporal_with_path([{:temporal, _} = temporal | path_segments]) do
+    {:temporal_path, temporal, path_segments}
+  end
 
   @doc false
   def build_list(items), do: {:list, items}

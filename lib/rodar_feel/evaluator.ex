@@ -34,6 +34,7 @@ defmodule RodarFeel.Evaluator do
 
   """
 
+  alias RodarFeel.Duration
   alias RodarFeel.Functions
 
   @doc """
@@ -50,6 +51,16 @@ defmodule RodarFeel.Evaluator do
 
   # --- Literals ---
   defp eval_node({:literal, value}, _bindings), do: {:ok, value}
+
+  # --- Temporal literal ---
+  defp eval_node({:temporal, str}, _bindings), do: resolve_temporal(str)
+
+  # --- Temporal literal with property access ---
+  defp eval_node({:temporal_path, temporal_ast, segments}, bindings) do
+    with {:ok, value} <- eval_node(temporal_ast, bindings) do
+      {:ok, resolve_remaining(segments, value)}
+    end
+  end
 
   # --- Path resolution ---
   defp eval_node({:path, segments}, bindings), do: {:ok, resolve_path(segments, bindings)}
@@ -169,11 +180,18 @@ defmodule RodarFeel.Evaluator do
 
   defp resolve_remaining([], value), do: value
 
-  defp resolve_remaining([segment | rest], map) when is_map(map) do
-    resolve_remaining(rest, Map.get(map, segment))
-  end
+  defp resolve_remaining([segment | rest], value) do
+    case temporal_property(value, segment) do
+      {:ok, prop} ->
+        resolve_remaining(rest, prop)
 
-  defp resolve_remaining(_segments, _non_map), do: nil
+      :not_temporal when is_map(value) ->
+        resolve_remaining(rest, Map.get(value, segment))
+
+      :not_temporal ->
+        nil
+    end
+  end
 
   defp eval_bracket_access(nil, _key), do: {:ok, nil}
 
@@ -396,12 +414,28 @@ defmodule RodarFeel.Evaluator do
   end
 
   # Comparison
-  defp eval_binop(:<, l, r), do: {:ok, l < r}
-  defp eval_binop(:>, l, r), do: {:ok, l > r}
-  defp eval_binop(:<=, l, r), do: {:ok, l <= r}
-  defp eval_binop(:>=, l, r), do: {:ok, l >= r}
+  defp eval_binop(:<, l, r), do: eval_cmp(:<, l, r)
+  defp eval_binop(:>, l, r), do: eval_cmp(:>, l, r)
+  defp eval_binop(:<=, l, r), do: eval_cmp(:<=, l, r)
+  defp eval_binop(:>=, l, r), do: eval_cmp(:>=, l, r)
+
+  # Temporal arithmetic (date ± duration, date - date, etc.)
+  defp eval_binop(op, l, r) when op in [:+, :-] do
+    case eval_temporal_binop(op, l, r) do
+      :not_temporal -> {:error, "unsupported binop: #{op}"}
+      result -> result
+    end
+  end
 
   defp eval_binop(op, _l, _r), do: {:error, "unsupported binop: #{op}"}
+
+  # Comparison with temporal fallback
+  defp eval_cmp(op, l, r) do
+    case eval_temporal_cmp(op, l, r) do
+      :not_temporal -> {:ok, apply(Kernel, op, [l, r])}
+      result -> result
+    end
+  end
 
   # --- In operator ---
 
@@ -417,4 +451,211 @@ defmodule RodarFeel.Evaluator do
   end
 
   defp eval_in(_val, _other), do: {:ok, false}
+
+  # --- Temporal literal resolution ---
+  # Tries date, time, naive datetime, then duration — first successful parse wins.
+
+  defp resolve_temporal(str) do
+    with :error <- try_date(str),
+         :error <- try_time(str),
+         :error <- try_naive_datetime(str),
+         :error <- try_duration(str) do
+      {:error, "invalid temporal literal: @\"#{str}\""}
+    end
+  end
+
+  defp try_date(str) do
+    case Date.from_iso8601(str) do
+      {:ok, d} -> {:ok, d}
+      _ -> :error
+    end
+  end
+
+  defp try_time(str) do
+    case Time.from_iso8601(str) do
+      {:ok, t} -> {:ok, t}
+      _ -> :error
+    end
+  end
+
+  defp try_naive_datetime(str) do
+    case NaiveDateTime.from_iso8601(str) do
+      {:ok, ndt} -> {:ok, ndt}
+      _ -> :error
+    end
+  end
+
+  defp try_duration(str) do
+    case Duration.parse(str) do
+      {:ok, d} -> {:ok, d}
+      _ -> :error
+    end
+  end
+
+  # --- Temporal property access ---
+  # Extends resolve_remaining to handle .year, .month, etc. on temporal values.
+
+  defp temporal_property(%Date{} = d, "year"), do: {:ok, d.year}
+  defp temporal_property(%Date{} = d, "month"), do: {:ok, d.month}
+  defp temporal_property(%Date{} = d, "day"), do: {:ok, d.day}
+
+  defp temporal_property(%Time{} = t, "hour"), do: {:ok, t.hour}
+  defp temporal_property(%Time{} = t, "minute"), do: {:ok, t.minute}
+  defp temporal_property(%Time{} = t, "second"), do: {:ok, t.second}
+
+  defp temporal_property(%NaiveDateTime{} = ndt, "year"), do: {:ok, ndt.year}
+  defp temporal_property(%NaiveDateTime{} = ndt, "month"), do: {:ok, ndt.month}
+  defp temporal_property(%NaiveDateTime{} = ndt, "day"), do: {:ok, ndt.day}
+  defp temporal_property(%NaiveDateTime{} = ndt, "hour"), do: {:ok, ndt.hour}
+  defp temporal_property(%NaiveDateTime{} = ndt, "minute"), do: {:ok, ndt.minute}
+  defp temporal_property(%NaiveDateTime{} = ndt, "second"), do: {:ok, ndt.second}
+
+  defp temporal_property(%Duration{} = d, "years"), do: {:ok, d.years}
+  defp temporal_property(%Duration{} = d, "months"), do: {:ok, d.months}
+  defp temporal_property(%Duration{} = d, "days"), do: {:ok, d.days}
+  defp temporal_property(%Duration{} = d, "hours"), do: {:ok, d.hours}
+  defp temporal_property(%Duration{} = d, "minutes"), do: {:ok, d.minutes}
+  defp temporal_property(%Duration{} = d, "seconds"), do: {:ok, d.seconds}
+
+  defp temporal_property(_, _), do: :not_temporal
+
+  # --- Temporal arithmetic helpers ---
+
+  defp eval_temporal_binop(:+, %Date{} = d, %Duration{} = dur),
+    do: {:ok, add_duration_to_date(d, dur)}
+
+  defp eval_temporal_binop(:+, %Duration{} = dur, %Date{} = d),
+    do: {:ok, add_duration_to_date(d, dur)}
+
+  defp eval_temporal_binop(:-, %Date{} = d, %Duration{} = dur) do
+    {:ok, add_duration_to_date(d, Duration.negate(dur))}
+  end
+
+  defp eval_temporal_binop(:-, %Date{} = a, %Date{} = b) do
+    {:ok, %Duration{days: Date.diff(a, b)}}
+  end
+
+  defp eval_temporal_binop(:+, %Time{} = t, %Duration{} = dur),
+    do: {:ok, add_duration_to_time(t, dur)}
+
+  defp eval_temporal_binop(:+, %Duration{} = dur, %Time{} = t),
+    do: {:ok, add_duration_to_time(t, dur)}
+
+  defp eval_temporal_binop(:-, %Time{} = t, %Duration{} = dur) do
+    {:ok, add_duration_to_time(t, Duration.negate(dur))}
+  end
+
+  defp eval_temporal_binop(:-, %Time{} = a, %Time{} = b) do
+    diff = Time.diff(a, b, :second)
+    {:ok, seconds_to_duration(diff)}
+  end
+
+  defp eval_temporal_binop(:+, %NaiveDateTime{} = ndt, %Duration{} = dur) do
+    {:ok, add_duration_to_naive(ndt, dur)}
+  end
+
+  defp eval_temporal_binop(:+, %Duration{} = dur, %NaiveDateTime{} = ndt) do
+    {:ok, add_duration_to_naive(ndt, dur)}
+  end
+
+  defp eval_temporal_binop(:-, %NaiveDateTime{} = ndt, %Duration{} = dur) do
+    {:ok, add_duration_to_naive(ndt, Duration.negate(dur))}
+  end
+
+  defp eval_temporal_binop(:-, %NaiveDateTime{} = a, %NaiveDateTime{} = b) do
+    diff = NaiveDateTime.diff(a, b, :second)
+    {:ok, seconds_to_duration(diff)}
+  end
+
+  defp eval_temporal_binop(:+, %Duration{} = a, %Duration{} = b), do: {:ok, Duration.add(a, b)}
+
+  defp eval_temporal_binop(:-, %Duration{} = a, %Duration{} = b) do
+    {:ok, Duration.add(a, Duration.negate(b))}
+  end
+
+  defp eval_temporal_binop(_, _, _), do: :not_temporal
+
+  # --- Temporal comparison helpers ---
+
+  defp eval_temporal_cmp(op, %Date{} = a, %Date{} = b),
+    do: {:ok, date_cmp(op, Date.compare(a, b))}
+
+  defp eval_temporal_cmp(op, %Time{} = a, %Time{} = b),
+    do: {:ok, date_cmp(op, Time.compare(a, b))}
+
+  defp eval_temporal_cmp(op, %NaiveDateTime{} = a, %NaiveDateTime{} = b) do
+    {:ok, date_cmp(op, NaiveDateTime.compare(a, b))}
+  end
+
+  defp eval_temporal_cmp(op, %Duration{} = a, %Duration{} = b) do
+    case Duration.compare(a, b) do
+      :error -> {:error, "cannot compare mixed duration types"}
+      result -> {:ok, date_cmp(op, result)}
+    end
+  end
+
+  defp eval_temporal_cmp(_, _, _), do: :not_temporal
+
+  defp date_cmp(:<, :lt), do: true
+  defp date_cmp(:<, _), do: false
+  defp date_cmp(:>, :gt), do: true
+  defp date_cmp(:>, _), do: false
+  defp date_cmp(:<=, :gt), do: false
+  defp date_cmp(:<=, _), do: true
+  defp date_cmp(:>=, :lt), do: false
+  defp date_cmp(:>=, _), do: true
+
+  # --- Date + Duration ---
+
+  defp add_duration_to_date(date, %Duration{} = dur) do
+    date
+    |> shift_months(dur.years * 12 + dur.months)
+    |> Date.add(dur.days)
+  end
+
+  defp shift_months(%Date{year: y, month: m, day: d}, months) do
+    total = y * 12 + (m - 1) + months
+    new_year = div(total, 12)
+    new_month = rem(total, 12) + 1
+    # Clamp day to valid range for the target month
+    max_day = Calendar.ISO.days_in_month(new_year, new_month)
+    Date.new!(new_year, new_month, min(d, max_day))
+  end
+
+  # --- Time + Duration ---
+
+  defp add_duration_to_time(%Time{} = t, %Duration{} = dur) do
+    seconds = Duration.to_seconds(dur)
+    total = Time.diff(t, ~T[00:00:00], :second) + trunc(seconds)
+    # Wrap around 24h
+    wrapped = rem(rem(total, 86_400) + 86_400, 86_400)
+    Time.add(~T[00:00:00], wrapped, :second)
+  end
+
+  # --- NaiveDateTime + Duration ---
+
+  defp add_duration_to_naive(%NaiveDateTime{} = ndt, %Duration{} = dur) do
+    # First apply year-month shift
+    date = shift_months(NaiveDateTime.to_date(ndt), dur.years * 12 + dur.months)
+    time = NaiveDateTime.to_time(ndt)
+    {:ok, ndt2} = NaiveDateTime.new(date, time)
+    # Then apply day-time shift
+    day_time_seconds =
+      dur.days * 86_400 + dur.hours * 3600 + dur.minutes * 60 + trunc(dur.seconds)
+
+    NaiveDateTime.add(ndt2, day_time_seconds, :second)
+  end
+
+  defp seconds_to_duration(total_seconds) do
+    abs_sec = abs(total_seconds)
+    days = div(abs_sec, 86_400)
+    remainder = rem(abs_sec, 86_400)
+    hours = div(remainder, 3600)
+    remainder = rem(remainder, 3600)
+    minutes = div(remainder, 60)
+    seconds = rem(remainder, 60)
+
+    dur = %Duration{days: days, hours: hours, minutes: minutes, seconds: seconds}
+    if total_seconds < 0, do: Duration.negate(dur), else: dur
+  end
 end

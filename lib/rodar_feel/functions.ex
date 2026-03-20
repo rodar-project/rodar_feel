@@ -278,6 +278,14 @@ defmodule RodarFeel.Functions do
     {:ok, "[#{inner}]"}
   end
 
+  defp dispatch("string", [%Date{} = d]), do: {:ok, Date.to_iso8601(d)}
+  defp dispatch("string", [%Time{} = t]), do: {:ok, Time.to_iso8601(t)}
+  defp dispatch("string", [%NaiveDateTime{} = ndt]), do: {:ok, NaiveDateTime.to_iso8601(ndt)}
+
+  defp dispatch("string", [%RodarFeel.Duration{} = d]) do
+    {:ok, format_duration(d)}
+  end
+
   defp dispatch("string", [map]) when is_map(map) do
     inner =
       map
@@ -351,6 +359,93 @@ defmodule RodarFeel.Functions do
 
   defp dispatch("list contains", args), do: arity_error("list contains", 2, args)
 
+  # --- Temporal construction functions ---
+
+  defp dispatch("date", [nil]), do: {:ok, nil}
+
+  defp dispatch("date", [s]) when is_binary(s) do
+    case Date.from_iso8601(s) do
+      {:ok, d} -> {:ok, d}
+      _ -> {:error, "date: invalid date string #{inspect(s)}"}
+    end
+  end
+
+  defp dispatch("date", [nil, _, _]), do: {:ok, nil}
+  defp dispatch("date", [_, nil, _]), do: {:ok, nil}
+  defp dispatch("date", [_, _, nil]), do: {:ok, nil}
+
+  defp dispatch("date", [y, m, d]) when is_integer(y) and is_integer(m) and is_integer(d) do
+    case Date.new(y, m, d) do
+      {:ok, date} -> {:ok, date}
+      _ -> {:error, "date: invalid date #{y}-#{m}-#{d}"}
+    end
+  end
+
+  defp dispatch("date", args) when length(args) not in [1, 3] do
+    arity_error("date", "1 or 3", args)
+  end
+
+  defp dispatch("time", [nil]), do: {:ok, nil}
+
+  defp dispatch("time", [s]) when is_binary(s) do
+    case Time.from_iso8601(s) do
+      {:ok, t} -> {:ok, t}
+      _ -> {:error, "time: invalid time string #{inspect(s)}"}
+    end
+  end
+
+  defp dispatch("time", [nil, _, _]), do: {:ok, nil}
+  defp dispatch("time", [_, nil, _]), do: {:ok, nil}
+  defp dispatch("time", [_, _, nil]), do: {:ok, nil}
+
+  defp dispatch("time", [h, m, s]) when is_integer(h) and is_integer(m) and is_integer(s) do
+    case Time.new(h, m, s) do
+      {:ok, t} -> {:ok, t}
+      _ -> {:error, "time: invalid time #{h}:#{m}:#{s}"}
+    end
+  end
+
+  defp dispatch("time", args) when length(args) not in [1, 3] do
+    arity_error("time", "1 or 3", args)
+  end
+
+  defp dispatch("date and time", [nil]), do: {:ok, nil}
+
+  defp dispatch("date and time", [s]) when is_binary(s) do
+    case NaiveDateTime.from_iso8601(s) do
+      {:ok, ndt} -> {:ok, ndt}
+      _ -> {:error, "date and time: invalid datetime string #{inspect(s)}"}
+    end
+  end
+
+  defp dispatch("date and time", [nil, _]), do: {:ok, nil}
+  defp dispatch("date and time", [_, nil]), do: {:ok, nil}
+
+  defp dispatch("date and time", [%Date{} = d, %Time{} = t]) do
+    {:ok, NaiveDateTime.new!(d, t)}
+  end
+
+  defp dispatch("date and time", args) when length(args) not in [1, 2] do
+    arity_error("date and time", "1 or 2", args)
+  end
+
+  defp dispatch("duration", [nil]), do: {:ok, nil}
+
+  defp dispatch("duration", [s]) when is_binary(s) do
+    alias RodarFeel.Duration
+    Duration.parse(s)
+  end
+
+  defp dispatch("duration", args), do: arity_error("duration", 1, args)
+
+  defp dispatch("now", []) do
+    {:ok, NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)}
+  end
+
+  defp dispatch("today", []) do
+    {:ok, Date.utc_today()}
+  end
+
   # --- Unknown function ---
   defp dispatch(name, _args) do
     {:error, "unknown FEEL function: #{name}"}
@@ -370,5 +465,39 @@ defmodule RodarFeel.Functions do
     "[#{inner}]"
   end
 
+  defp format_value(%Date{} = d), do: Date.to_iso8601(d)
+  defp format_value(%Time{} = t), do: Time.to_iso8601(t)
+  defp format_value(%NaiveDateTime{} = ndt), do: NaiveDateTime.to_iso8601(ndt)
+  defp format_value(%RodarFeel.Duration{} = d), do: format_duration(d)
   defp format_value(other), do: inspect(other)
+
+  defp format_duration(%RodarFeel.Duration{} = d) do
+    date_part =
+      [
+        if(d.years != 0, do: "#{d.years}Y"),
+        if(d.months != 0, do: "#{d.months}M"),
+        if(d.days != 0, do: "#{d.days}D")
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join()
+
+    time_part =
+      [
+        if(d.hours != 0, do: "#{d.hours}H"),
+        if(d.minutes != 0, do: "#{d.minutes}M"),
+        if(d.seconds != 0, do: "#{format_seconds(d.seconds)}S")
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join()
+
+    case {date_part, time_part} do
+      {"", ""} -> "PT0S"
+      {dp, ""} -> "P#{dp}"
+      {"", tp} -> "PT#{tp}"
+      {dp, tp} -> "P#{dp}T#{tp}"
+    end
+  end
+
+  defp format_seconds(s) when is_float(s), do: :erlang.float_to_binary(s, decimals: 1)
+  defp format_seconds(s), do: Integer.to_string(s)
 end

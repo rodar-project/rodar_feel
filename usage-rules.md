@@ -15,15 +15,17 @@ Always use these entry points. Do not call `RodarFeel.Parser` or `RodarFeel.Eval
 
 ## Bindings
 
-Bindings are plain Elixir maps with **string keys**. FEEL identifiers resolve directly against the bindings map.
+Bindings are plain Elixir maps. Both **string keys** and **atom keys** are accepted — string keys are canonical and take precedence when both exist for the same name.
 
 ```elixir
-# GOOD — string keys
+# GOOD — string keys (canonical)
 RodarFeel.eval("amount > 1000", %{"amount" => 1500})
 
-# BAD — atom keys will not resolve
+# GOOD — atom keys also work
 RodarFeel.eval("amount > 1000", %{amount: 1500})
-# => {:ok, nil > 1000} — `amount` resolves to nil
+
+# String key wins when both exist
+RodarFeel.eval("x", %{x: 1, "x" => 2})  # => {:ok, 2}
 ```
 
 Nested maps work with dot-path access:
@@ -313,12 +315,15 @@ end)
 
 ### Atom keys in bindings
 
-```elixir
-# BAD — atoms don't match FEEL identifiers
-RodarFeel.eval("name", %{name: "Alice"})  # => {:ok, nil}
+Atom keys now work transparently, but string keys are still canonical and recommended for clarity. When both an atom and string key exist for the same name, the string key takes precedence.
 
-# GOOD — string keys
-RodarFeel.eval("name", %{"name" => "Alice"})  # => {:ok, "Alice"}
+```elixir
+# Both work
+RodarFeel.eval("name", %{name: "Alice"})        # => {:ok, "Alice"}
+RodarFeel.eval("name", %{"name" => "Alice"})     # => {:ok, "Alice"}
+
+# String key wins when both exist
+RodarFeel.eval("x", %{x: 1, "x" => 2})          # => {:ok, 2}
 ```
 
 ### Expecting exceptions on invalid input

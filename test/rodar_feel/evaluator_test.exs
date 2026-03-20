@@ -223,4 +223,43 @@ defmodule RodarFeel.EvaluatorTest do
       assert {:ok, []} = Evaluator.evaluate({:list, []}, %{})
     end
   end
+
+  describe "atom key bindings" do
+    test "top-level atom key" do
+      assert {:ok, "Alice"} = RodarFeel.eval("name", %{name: "Alice"})
+    end
+
+    test "nested atom key via path" do
+      assert {:ok, "shipped"} =
+               RodarFeel.eval("order.status", %{order: %{status: "shipped"}})
+    end
+
+    test "atom key in arithmetic expression" do
+      assert {:ok, true} = RodarFeel.eval("amount > 1000", %{amount: 1500})
+    end
+
+    test "atom key with bracket access" do
+      assert {:ok, "b"} = RodarFeel.eval(~s|items["x"]|, %{items: %{x: "b"}})
+    end
+
+    test "mixed atom and string keys in same map" do
+      bindings = Map.merge(%{age: 25}, %{"name" => "Bob"})
+      assert {:ok, "Bob"} = RodarFeel.eval("name", bindings)
+      assert {:ok, 25} = RodarFeel.eval("age", bindings)
+    end
+
+    test "string key takes precedence over atom key" do
+      bindings = %{"status" => "string_val", status: "atom_val"}
+      assert {:ok, "string_val"} = RodarFeel.eval("status", bindings)
+    end
+
+    test "nil value with atom key returned correctly" do
+      assert {:ok, nil} = RodarFeel.eval("x", %{x: nil})
+    end
+
+    test "atom keys in eval_unary bindings" do
+      assert {:ok, true} =
+               RodarFeel.eval_unary("> threshold", 150, %{threshold: 100})
+    end
+  end
 end

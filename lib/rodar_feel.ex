@@ -19,6 +19,7 @@ defmodule RodarFeel do
 
   Bindings receive the raw data map directly. FEEL users write `count > 5`,
   not `data["count"] > 5`. Top-level identifiers resolve against the bindings map.
+  Both atom and string keys are accepted in bindings (string keys take precedence).
 
   ## Examples
 

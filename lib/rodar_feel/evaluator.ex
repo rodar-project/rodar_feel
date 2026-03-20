@@ -248,10 +248,24 @@ defmodule RodarFeel.Evaluator do
 
   # --- Helpers ---
 
+  defp flex_get(map, key) when is_map(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        try do
+          Map.get(map, String.to_existing_atom(key))
+        rescue
+          ArgumentError -> nil
+        end
+    end
+  end
+
   defp resolve_path([], _map), do: nil
 
   defp resolve_path([segment | rest], map) when is_map(map) do
-    value = Map.get(map, segment)
+    value = flex_get(map, segment)
     resolve_remaining(rest, value)
   end
 
@@ -265,7 +279,7 @@ defmodule RodarFeel.Evaluator do
         resolve_remaining(rest, prop)
 
       :not_temporal when is_map(value) ->
-        resolve_remaining(rest, Map.get(value, segment))
+        resolve_remaining(rest, flex_get(value, segment))
 
       :not_temporal ->
         nil
@@ -275,7 +289,7 @@ defmodule RodarFeel.Evaluator do
   defp eval_bracket_access(nil, _key), do: {:ok, nil}
 
   defp eval_bracket_access(map, key) when is_map(map) do
-    {:ok, Map.get(map, to_string(key))}
+    {:ok, flex_get(map, to_string(key))}
   end
 
   defp eval_bracket_access(list, index) when is_list(list) and is_integer(index) do

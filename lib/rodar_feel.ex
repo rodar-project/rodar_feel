@@ -1,10 +1,21 @@
 defmodule RodarFeel do
   @moduledoc """
-  FEEL (Friendly Enough Expression Language) evaluator for BPMN 2.0.
+  FEEL (Friendly Enough Expression Language) evaluator for BPMN 2.0 and DMN.
 
-  FEEL is the standard expression language for BPMN and DMN. It provides
-  a simple, safe expression language with null propagation, three-valued
-  boolean logic, and built-in functions.
+  FEEL is the standard expression language for BPMN and DMN. This module
+  provides a complete FEEL implementation with:
+
+  - 48 built-in functions (numeric, string, list, boolean, temporal, statistical)
+  - Temporal types with timezone support (Date, Time, DateTime, Duration)
+  - DMN unary tests for decision table cells
+  - Null propagation and three-valued boolean logic
+  - User-defined functions (lambdas) with closures
+  - `instance of` type checking
+
+  ## API
+
+  - `eval/2` — evaluate a FEEL expression against bindings
+  - `eval_unary/3` — evaluate a DMN unary test against an input value
 
   Bindings receive the raw data map directly. FEEL users write `count > 5`,
   not `data["count"] > 5`. Top-level identifiers resolve against the bindings map.

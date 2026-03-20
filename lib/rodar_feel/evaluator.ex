@@ -2,8 +2,10 @@ defmodule RodarFeel.Evaluator do
   @moduledoc """
   Tree-walking evaluator for FEEL AST nodes.
 
-  Implements FEEL semantics including null propagation, three-valued boolean
-  logic, and string concatenation via `+`.
+  Provides two entry points:
+
+  - `evaluate/2` — evaluate a FEEL expression AST
+  - `evaluate_unary/3` — evaluate a DMN unary test AST against an input value
 
   ## Key behaviors
 
@@ -11,12 +13,17 @@ defmodule RodarFeel.Evaluator do
   - **Three-valued boolean:** `true and nil` evaluates to `nil`, `false and nil` evaluates to `false`
   - **String `+`:** If both operands are strings, concatenate; if both are numbers, add
   - **Path resolution:** `order.status` resolves to `bindings["order"]["status"]`
+  - **Temporal property access:** `date.year`, `dt.timezone` resolves properties on Date/Time/DateTime/Duration values
   - **`in` operator:** Check list membership or range inclusion
   - **`between` operator:** `x between a and b` is `a <= x and x <= b`
+  - **`instance of`:** Type checking against FEEL type names
   - **Bracket access:** `a["key"]` resolves `a` then accesses string key
   - **Context literals:** `{a: 1, b: 2}` evaluates to `%{"a" => 1, "b" => 2}`
   - **For-in-return:** `for x in list return x + 1` iterates and collects results
   - **Quantified:** `some/every x in list satisfies condition`
+  - **Temporal arithmetic:** `date + duration`, `date - date`, `datetime ± duration`, etc.
+  - **Temporal comparison:** proper `Date.compare/2`, `DateTime.compare/2`, etc.
+  - **Lambdas:** `function(x) x + 1` creates closures, invocable via variable bindings
 
   ## Examples
 
@@ -530,6 +537,7 @@ defmodule RodarFeel.Evaluator do
   defp resolve_temporal(str) do
     with :error <- try_date(str),
          :error <- try_time(str),
+         :error <- try_datetime(str),
          :error <- try_naive_datetime(str),
          :error <- try_duration(str) do
       {:error, "invalid temporal literal: @\"#{str}\""}
@@ -548,6 +556,23 @@ defmodule RodarFeel.Evaluator do
       {:ok, t} -> {:ok, t}
       _ -> :error
     end
+  end
+
+  # Timezone-aware DateTime: must come before NaiveDateTime.
+  # Matches strings with Z, +HH:MM, or -HH:MM suffixes.
+  defp try_datetime(str) do
+    if has_timezone_info?(str) do
+      case DateTime.from_iso8601(str) do
+        {:ok, dt, _offset} -> {:ok, dt}
+        _ -> :error
+      end
+    else
+      :error
+    end
+  end
+
+  defp has_timezone_info?(str) do
+    String.match?(str, ~r/[Zz]$/) or String.match?(str, ~r/[+-]\d{2}:\d{2}$/)
   end
 
   defp try_naive_datetime(str) do
@@ -574,6 +599,15 @@ defmodule RodarFeel.Evaluator do
   defp temporal_property(%Time{} = t, "hour"), do: {:ok, t.hour}
   defp temporal_property(%Time{} = t, "minute"), do: {:ok, t.minute}
   defp temporal_property(%Time{} = t, "second"), do: {:ok, t.second}
+
+  defp temporal_property(%DateTime{} = dt, "year"), do: {:ok, dt.year}
+  defp temporal_property(%DateTime{} = dt, "month"), do: {:ok, dt.month}
+  defp temporal_property(%DateTime{} = dt, "day"), do: {:ok, dt.day}
+  defp temporal_property(%DateTime{} = dt, "hour"), do: {:ok, dt.hour}
+  defp temporal_property(%DateTime{} = dt, "minute"), do: {:ok, dt.minute}
+  defp temporal_property(%DateTime{} = dt, "second"), do: {:ok, dt.second}
+  defp temporal_property(%DateTime{} = dt, "timezone"), do: {:ok, dt.time_zone}
+  defp temporal_property(%DateTime{} = dt, "offset"), do: {:ok, dt.utc_offset + dt.std_offset}
 
   defp temporal_property(%NaiveDateTime{} = ndt, "year"), do: {:ok, ndt.year}
   defp temporal_property(%NaiveDateTime{} = ndt, "month"), do: {:ok, ndt.month}
@@ -622,6 +656,23 @@ defmodule RodarFeel.Evaluator do
     {:ok, seconds_to_duration(diff)}
   end
 
+  defp eval_temporal_binop(:+, %DateTime{} = dt, %Duration{} = dur) do
+    {:ok, add_duration_to_datetime(dt, dur)}
+  end
+
+  defp eval_temporal_binop(:+, %Duration{} = dur, %DateTime{} = dt) do
+    {:ok, add_duration_to_datetime(dt, dur)}
+  end
+
+  defp eval_temporal_binop(:-, %DateTime{} = dt, %Duration{} = dur) do
+    {:ok, add_duration_to_datetime(dt, Duration.negate(dur))}
+  end
+
+  defp eval_temporal_binop(:-, %DateTime{} = a, %DateTime{} = b) do
+    diff = DateTime.diff(a, b, :second)
+    {:ok, seconds_to_duration(diff)}
+  end
+
   defp eval_temporal_binop(:+, %NaiveDateTime{} = ndt, %Duration{} = dur) do
     {:ok, add_duration_to_naive(ndt, dur)}
   end
@@ -654,6 +705,10 @@ defmodule RodarFeel.Evaluator do
 
   defp eval_temporal_cmp(op, %Time{} = a, %Time{} = b),
     do: {:ok, date_cmp(op, Time.compare(a, b))}
+
+  defp eval_temporal_cmp(op, %DateTime{} = a, %DateTime{} = b) do
+    {:ok, date_cmp(op, DateTime.compare(a, b))}
+  end
 
   defp eval_temporal_cmp(op, %NaiveDateTime{} = a, %NaiveDateTime{} = b) do
     {:ok, date_cmp(op, NaiveDateTime.compare(a, b))}
@@ -704,6 +759,21 @@ defmodule RodarFeel.Evaluator do
     Time.add(~T[00:00:00], wrapped, :second)
   end
 
+  # --- DateTime + Duration ---
+
+  defp add_duration_to_datetime(%DateTime{} = dt, %Duration{} = dur) do
+    # Convert to naive, apply duration, convert back to same timezone
+    naive = DateTime.to_naive(dt)
+    shifted = add_duration_to_naive(naive, dur)
+
+    case DateTime.from_naive(shifted, dt.time_zone, Tz.TimeZoneDatabase) do
+      {:ok, result} -> result
+      {:ambiguous, first, _second} -> first
+      {:gap, _just_before, just_after} -> just_after
+      {:error, _} -> DateTime.from_naive!(shifted, "Etc/UTC")
+    end
+  end
+
   # --- NaiveDateTime + Duration ---
 
   defp add_duration_to_naive(%NaiveDateTime{} = ndt, %Duration{} = dur) do
@@ -741,6 +811,7 @@ defmodule RodarFeel.Evaluator do
   defp check_type(v, "boolean") when is_boolean(v), do: true
   defp check_type(%Date{}, "date"), do: true
   defp check_type(%Time{}, "time"), do: true
+  defp check_type(%DateTime{}, "date and time"), do: true
   defp check_type(%NaiveDateTime{}, "date and time"), do: true
 
   defp check_type(%Duration{} = d, "duration"),

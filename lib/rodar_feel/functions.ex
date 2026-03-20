@@ -1,6 +1,6 @@
 defmodule RodarFeel.Functions do
   @moduledoc """
-  Built-in FEEL function implementations.
+  Built-in FEEL function implementations (48 functions).
 
   Dispatches on `{name_string, args_list}`. Implements null propagation:
   if any argument is `nil`, the result is `nil` (except for `is null`, `not`,
@@ -12,12 +12,17 @@ defmodule RodarFeel.Functions do
     `sum/1`, `count/1`, `product/1`, `mean/1`
   - String: `string length/1`, `contains/2`, `starts with/2`, `ends with/2`,
     `upper case/1`, `lower case/1`, `substring/2-3`, `split/2`,
-    `substring before/2`, `substring after/2`, `replace/3`, `trim/1`
+    `substring before/2`, `substring after/2`, `replace/3`, `trim/1`,
+    `string join/1-2`, `matches/2`
   - Boolean: `not/1`, `all/1`, `any/1`
   - Null: `is null/1`
   - List: `append/2`, `concatenate/2+`, `reverse/1`, `flatten/1`,
     `distinct values/1`, `sort/1`, `index of/2`, `list contains/2`
-  - Conversion: `string/1`
+  - Conversion: `string/1`, `number/1`, `number/3` (locale-aware)
+  - Temporal: `date/1`, `date/3`, `time/1`, `time/3`, `date and time/1-3`,
+    `duration/1`, `now/0`, `today/0`
+  - Statistical: `median/1`, `stddev/1`, `mode/1`
+  - Misc: `random/0`
 
   ## Examples
 
@@ -280,6 +285,7 @@ defmodule RodarFeel.Functions do
 
   defp dispatch("string", [%Date{} = d]), do: {:ok, Date.to_iso8601(d)}
   defp dispatch("string", [%Time{} = t]), do: {:ok, Time.to_iso8601(t)}
+  defp dispatch("string", [%DateTime{} = dt]), do: {:ok, DateTime.to_iso8601(dt)}
   defp dispatch("string", [%NaiveDateTime{} = ndt]), do: {:ok, NaiveDateTime.to_iso8601(ndt)}
 
   defp dispatch("string", [%RodarFeel.Duration{} = d]) do
@@ -425,8 +431,28 @@ defmodule RodarFeel.Functions do
     {:ok, NaiveDateTime.new!(d, t)}
   end
 
-  defp dispatch("date and time", args) when length(args) not in [1, 2] do
-    arity_error("date and time", "1 or 2", args)
+  # date and time(naive_datetime, timezone_string) → DateTime
+  defp dispatch("date and time", [%NaiveDateTime{} = ndt, tz]) when is_binary(tz) do
+    case DateTime.from_naive(ndt, tz, Tz.TimeZoneDatabase) do
+      {:ok, dt} -> {:ok, dt}
+      {:ambiguous, first, _} -> {:ok, first}
+      {:gap, _, just_after} -> {:ok, just_after}
+      {:error, reason} -> {:error, "date and time: #{inspect(reason)}"}
+    end
+  end
+
+  # date and time(date, time, timezone_string) → DateTime
+  defp dispatch("date and time", [%Date{} = d, %Time{} = t, tz]) when is_binary(tz) do
+    ndt = NaiveDateTime.new!(d, t)
+    dispatch("date and time", [ndt, tz])
+  end
+
+  defp dispatch("date and time", [nil, _, _]), do: {:ok, nil}
+  defp dispatch("date and time", [_, nil, _]), do: {:ok, nil}
+  defp dispatch("date and time", [_, _, nil]), do: {:ok, nil}
+
+  defp dispatch("date and time", args) when length(args) not in [1, 2, 3] do
+    arity_error("date and time", "1-3", args)
   end
 
   defp dispatch("duration", [nil]), do: {:ok, nil}
@@ -439,7 +465,7 @@ defmodule RodarFeel.Functions do
   defp dispatch("duration", args), do: arity_error("duration", 1, args)
 
   defp dispatch("now", []) do
-    {:ok, NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)}
+    {:ok, DateTime.utc_now() |> DateTime.truncate(:second)}
   end
 
   defp dispatch("today", []) do
@@ -615,6 +641,7 @@ defmodule RodarFeel.Functions do
 
   defp format_value(%Date{} = d), do: Date.to_iso8601(d)
   defp format_value(%Time{} = t), do: Time.to_iso8601(t)
+  defp format_value(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
   defp format_value(%NaiveDateTime{} = ndt), do: NaiveDateTime.to_iso8601(ndt)
   defp format_value(%RodarFeel.Duration{} = d), do: format_duration(d)
   defp format_value(other), do: inspect(other)

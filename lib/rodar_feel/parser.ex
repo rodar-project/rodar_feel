@@ -3,23 +3,30 @@ defmodule RodarFeel.Parser do
   NimbleParsec-based parser for FEEL (Friendly Enough Expression Language).
 
   Produces an AST of tagged tuples suitable for evaluation by
-  `RodarFeel.Evaluator`.
+  `RodarFeel.Evaluator`. Provides two entry points:
+
+  - `parse/1` — parse a full FEEL expression
+  - `parse_unary/1` — parse a DMN unary test
 
   ## Grammar precedence (low to high)
 
   1. `or`
   2. `and`
-  3. Comparison (`=`, `!=`, `<`, `>`, `<=`, `>=`), `in`, and `between`
+  3. Comparison (`=`, `!=`, `<`, `>`, `<=`, `>=`), `in`, `between`, `instance of`
   4. Addition (`+`, `-`)
   5. Multiplication (`*`, `/`, `%`)
   6. Exponentiation (`**`)
   7. Unary (`-`, `not`)
   8. Primary (literals, parens, if-then-else, for-in-return, some/every,
-     function calls, paths, lists, context literals, bracket access)
+     lambda, temporal, function calls, paths, lists, context literals, bracket access)
 
   ## AST node types
 
+  ### Expression nodes
+
   - `{:literal, value}` -- number, string, boolean, nil
+  - `{:temporal, string}` -- temporal literal (`@"..."`)
+  - `{:temporal_path, temporal, [segments]}` -- temporal with property access
   - `{:binop, op, left, right}` -- arithmetic, comparison, boolean
   - `{:unary, op, expr}` -- negation, not
   - `{:path, [segments]}` -- dot-separated identifiers
@@ -27,13 +34,24 @@ defmodule RodarFeel.Parser do
   - `{:if, condition, then_expr, else_expr}`
   - `{:in, expr, collection_or_range}`
   - `{:between, expr, low, high}`
+  - `{:instance_of, expr, type_name}` -- type checking
   - `{:range, from, to}`
   - `{:list, [items]}`
   - `{:context, [{key, expr}, ...]}`
   - `{:funcall, name, [args]}`
+  - `{:lambda, [params], body}`
   - `{:for, [{var, collection}], body}`
   - `{:some, [{var, collection}], condition}`
   - `{:every, [{var, collection}], condition}`
+
+  ### Unary test nodes
+
+  - `{:unary_wildcard}` -- `-` matches anything
+  - `{:unary_cmp, op, expr}` -- comparison test
+  - `{:unary_range, from, to, from_inclusive, to_inclusive}` -- range test
+  - `{:unary_not, inner}` -- negated test
+  - `{:unary_disjunction, [tests]}` -- match any
+  - `{:unary_value, expr}` -- equality test
 
   ## Examples
 

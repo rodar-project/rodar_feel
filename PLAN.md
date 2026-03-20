@@ -116,54 +116,57 @@ Use Elixir's built-in `Date`, `Time`, `DateTime`, `NaiveDateTime` — no `tzdata
 - `lib/rodar_feel/functions.ex` — `date()`, `time()`, `now()`, `today()`, `duration()`, `date and time()`
 - `lib/rodar_feel/duration.ex` — NEW: duration struct and operations
 
-### Option B: Full (with timezone support)
+### Option B: Full (with timezone support) — DONE
 
-Extends Option A with timezone-aware datetime. Would require either:
+Extends Option A with timezone-aware datetime using the `tz` library.
 
-- `tz` or `time_zone_info` (lightweight timezone DBs, no `hackney`)
-- Or accept UTC-only as a reasonable constraint
-
-Deferred until DMN conformance is needed.
+- [x] `@"2024-03-20T10:30:00Z"` → `DateTime` (UTC)
+- [x] `@"2024-03-20T10:30:00+05:00"` → `DateTime` (offset, normalized to UTC)
+- [x] `date and time(naive_dt, "America/New_York")` → `DateTime` with named timezone
+- [x] `date and time(date, time, "Europe/London")` → 3-arg form with timezone
+- [x] `.timezone` and `.offset` property access on `DateTime`
+- [x] `DateTime ± Duration`, `DateTime - DateTime` arithmetic (preserves timezone)
+- [x] `DateTime` comparison (cross-offset via UTC normalization)
+- [x] `now()` returns UTC `DateTime` instead of `NaiveDateTime`
+- [x] DST ambiguity and gap handling
 
 ---
 
-## Phase 4: Unary Tests — TODO
+## Phase 4: Unary Tests — DONE
 
-Separate parser entry point for DMN unary test syntax. Only needed if we add DMN decision table support to Rodar.
+Separate parser entry point for DMN unary test syntax.
 
-- [ ] `< 100` — comparison test
-- [ ] `[1..5]` — range test (inclusive)
-- [ ] `(1..5)` — range test (exclusive)
-- [ ] `[1..5)` / `(1..5]` — half-open ranges
-- [ ] `not(< 100)` — negated test
-- [ ] `1, 2, 3` — disjunction (match any)
-- [ ] `-` — wildcard (match anything)
+- [x] `< 100` — comparison test
+- [x] `[1..5]` — range test (inclusive)
+- [x] `(1..5)` — range test (exclusive)
+- [x] `[1..5)` / `(1..5]` — half-open ranges
+- [x] `not(< 100)` — negated test
+- [x] `1, 2, 3` — disjunction (match any)
+- [x] `-` — wildcard (match anything)
 
 #### API
 
-- [ ] `RodarFeel.eval_unary(test_string, input_value, bindings)` — new entry point
-- [ ] AST: `{:unary_test, ...}` variants
+- [x] `RodarFeel.eval_unary(test_string, input_value, bindings)` — new entry point
+- [x] AST: `{:unary_wildcard}`, `{:unary_cmp, ...}`, `{:unary_range, ...}`, `{:unary_not, ...}`, `{:unary_disjunction, ...}`, `{:unary_value, ...}`
 
-#### Files to modify
+#### Files modified
 
-- `lib/rodar_feel/parser.ex` — new `defparsec(:parse_unary_test, ...)` entry point
-- `lib/rodar_feel/evaluator.ex` — unary test evaluation
+- `lib/rodar_feel/parser.ex` — new `defparsec(:parse_unary_test, ...)` entry point, `parse_unary/1` public API
+- `lib/rodar_feel/evaluator.ex` — `evaluate_unary/3` with temporal comparison support in ranges
 - `lib/rodar_feel.ex` — new `eval_unary/3` public function
 
 ---
 
-## Phase 5: Nice to Have — TODO
+## Phase 5: Nice to Have — DONE
 
-Lower priority items, implement as needed:
-
-- [ ] `instance of` type checking — `x instance of number`
-- [ ] `number(string)` — parse string to number
-- [ ] Statistical functions: `median/1`, `stddev/1`, `mode/1`
-- [ ] `random()` — random number generation (testing/simulation)
-- [ ] User-defined functions / lambdas — FEEL spec, rarely needed in BPMN
-- [ ] `matches(string, pattern)` — regex matching
-- [ ] `string join(list, delimiter)` — join list into string
-- [ ] `number(from, grouping, decimal)` — locale-aware number parsing
+- [x] `instance of` type checking — all FEEL types including `date and time`, `years and months duration`, `days and time duration`, `any`
+- [x] `number(string)` — parse string to number
+- [x] `number(from, grouping, decimal)` — locale-aware number parsing
+- [x] Statistical functions: `median/1`, `stddev/1`, `mode/1`
+- [x] `random()` — random number generation
+- [x] User-defined functions / lambdas — `function(x, y) x + y` with closures, context scoping, higher-order usage
+- [x] `matches(string, pattern)` — regex matching
+- [x] `string join(list, delimiter)` — join list into string with null filtering
 
 ---
 
@@ -182,32 +185,37 @@ For reference — pitfalls we've deliberately avoided:
 
 ## Current Coverage Summary
 
-| Category   | Functions                                                                                                                                                           | Count  |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Numeric    | `abs`, `floor`, `ceiling`, `round`, `min`, `max`, `sum`, `count`, `product`, `mean`                                                                                 | 10     |
-| String     | `string length`, `contains`, `starts with`, `ends with`, `upper case`, `lower case`, `substring`, `split`, `substring before`, `substring after`, `replace`, `trim` | 12     |
-| List       | `append`, `concatenate`, `reverse`, `flatten`, `distinct values`, `sort`, `index of`, `list contains`                                                               | 8      |
-| Boolean    | `not`, `is null`, `all`, `any`                                                                                                                                      | 4      |
-| Conversion | `string`                                                                                                                                                            | 1      |
-| Temporal   | `date`, `time`, `date and time`, `duration`, `now`, `today`                                                                                                         | 6      |
-| **Total**  |                                                                                                                                                                     | **41** |
+| Category    | Functions                                                                                                                                                           | Count  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| Numeric     | `abs`, `floor`, `ceiling`, `round`, `min`, `max`, `sum`, `count`, `product`, `mean`                                                                                 | 10     |
+| String      | `string length`, `contains`, `starts with`, `ends with`, `upper case`, `lower case`, `substring`, `split`, `substring before`, `substring after`, `replace`, `trim`, `string join`, `matches` | 14     |
+| List        | `append`, `concatenate`, `reverse`, `flatten`, `distinct values`, `sort`, `index of`, `list contains`                                                               | 8      |
+| Boolean     | `not`, `is null`, `all`, `any`                                                                                                                                      | 4      |
+| Conversion  | `string`, `number`                                                                                                                                                  | 2      |
+| Temporal    | `date`, `time`, `date and time`, `duration`, `now`, `today`                                                                                                         | 6      |
+| Statistical | `median`, `stddev`, `mode`                                                                                                                                          | 3      |
+| Misc        | `random`                                                                                                                                                            | 1      |
+| **Total**   |                                                                                                                                                                     | **48** |
 
-| Feature                                      | Status      |
-| -------------------------------------------- | ----------- |
-| Arithmetic (`+`, `-`, `*`, `/`, `%`, `**`)   | Done        |
-| Comparison (`=`, `!=`, `<`, `>`, `<=`, `>=`) | Done        |
-| Boolean (`and`, `or`, `not`)                 | Done        |
-| `in` operator (list + range)                 | Done        |
-| `between X and Y`                            | Done        |
-| `if-then-else`                               | Done        |
-| Path access (`a.b.c`)                        | Done        |
-| Bracket access (`a["key"]`, `a[0]`)          | Done        |
-| List literals (`[1, 2, 3]`)                  | Done        |
-| Context literals (`{a: 1, b: 2}`)            | Done        |
-| For-in-return                                | Done        |
-| Quantified (`some`/`every`)                  | Done        |
-| Comments (`//`, `/* */`)                     | Done        |
-| Null propagation                             | Done        |
-| Three-valued boolean logic                   | Done        |
-| Temporal types                               | Done        |
-| Unary tests (DMN)                            | Not started |
+| Feature                                      | Status |
+| -------------------------------------------- | ------ |
+| Arithmetic (`+`, `-`, `*`, `/`, `%`, `**`)   | Done   |
+| Comparison (`=`, `!=`, `<`, `>`, `<=`, `>=`) | Done   |
+| Boolean (`and`, `or`, `not`)                 | Done   |
+| `in` operator (list + range)                 | Done   |
+| `between X and Y`                            | Done   |
+| `if-then-else`                               | Done   |
+| Path access (`a.b.c`)                        | Done   |
+| Bracket access (`a["key"]`, `a[0]`)          | Done   |
+| List literals (`[1, 2, 3]`)                  | Done   |
+| Context literals (`{a: 1, b: 2}`)            | Done   |
+| For-in-return                                | Done   |
+| Quantified (`some`/`every`)                  | Done   |
+| Comments (`//`, `/* */`)                     | Done   |
+| Null propagation                             | Done   |
+| Three-valued boolean logic                   | Done   |
+| Temporal types                               | Done   |
+| Timezone-aware datetime                      | Done   |
+| Unary tests (DMN)                            | Done   |
+| `instance of`                                | Done   |
+| User-defined functions / lambdas             | Done   |

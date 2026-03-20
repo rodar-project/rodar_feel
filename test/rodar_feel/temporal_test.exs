@@ -104,9 +104,9 @@ defmodule RodarFeel.TemporalTest do
   end
 
   describe "now() and today()" do
-    test "now returns a NaiveDateTime" do
+    test "now returns a DateTime" do
       {:ok, result} = RodarFeel.eval(~s|now()|, %{})
-      assert %NaiveDateTime{} = result
+      assert %DateTime{} = result
     end
 
     test "today returns a Date" do

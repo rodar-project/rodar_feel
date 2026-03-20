@@ -446,6 +446,154 @@ defmodule RodarFeel.Functions do
     {:ok, Date.utc_today()}
   end
 
+  # --- Number parsing ---
+  defp dispatch("number", [nil]), do: {:ok, nil}
+
+  defp dispatch("number", [s]) when is_binary(s) do
+    case parse_number_string(s) do
+      {:ok, n} -> {:ok, n}
+      :error -> {:error, "number: cannot parse #{inspect(s)}"}
+    end
+  end
+
+  defp dispatch("number", [nil, _, _]), do: {:ok, nil}
+  defp dispatch("number", [_, nil, _]), do: {:ok, nil}
+  defp dispatch("number", [_, _, nil]), do: {:ok, nil}
+
+  defp dispatch("number", [s, grouping, decimal])
+       when is_binary(s) and is_binary(grouping) and is_binary(decimal) do
+    # Remove grouping separators, replace decimal separator with "."
+    cleaned =
+      s
+      |> String.replace(grouping, "")
+      |> String.replace(decimal, ".")
+
+    case parse_number_string(cleaned) do
+      {:ok, n} ->
+        {:ok, n}
+
+      :error ->
+        {:error,
+         "number: cannot parse #{inspect(s)} with grouping=#{inspect(grouping)}, decimal=#{inspect(decimal)}"}
+    end
+  end
+
+  defp dispatch("number", args) when length(args) not in [1, 3] do
+    arity_error("number", "1 or 3", args)
+  end
+
+  # --- Statistical functions ---
+  defp dispatch("median", [nil]), do: {:ok, nil}
+
+  defp dispatch("median", [list]) when is_list(list) do
+    cond do
+      list == [] ->
+        {:ok, nil}
+
+      Enum.any?(list, &is_nil/1) ->
+        {:ok, nil}
+
+      true ->
+        sorted = Enum.sort(list)
+        len = length(sorted)
+        mid = div(len, 2)
+
+        if rem(len, 2) == 1 do
+          {:ok, Enum.at(sorted, mid)}
+        else
+          {:ok, (Enum.at(sorted, mid - 1) + Enum.at(sorted, mid)) / 2}
+        end
+    end
+  end
+
+  defp dispatch("median", args), do: arity_error("median", 1, args)
+
+  defp dispatch("stddev", [nil]), do: {:ok, nil}
+
+  defp dispatch("stddev", [list]) when is_list(list) do
+    cond do
+      length(list) < 2 ->
+        {:ok, nil}
+
+      Enum.any?(list, &is_nil/1) ->
+        {:ok, nil}
+
+      true ->
+        n = length(list)
+        mean = Enum.sum(list) / n
+        variance = Enum.reduce(list, 0, fn x, acc -> acc + (x - mean) ** 2 end) / (n - 1)
+        {:ok, :math.sqrt(variance)}
+    end
+  end
+
+  defp dispatch("stddev", args), do: arity_error("stddev", 1, args)
+
+  defp dispatch("mode", [nil]), do: {:ok, nil}
+
+  defp dispatch("mode", [list]) when is_list(list) do
+    cond do
+      list == [] ->
+        {:ok, []}
+
+      Enum.any?(list, &is_nil/1) ->
+        {:ok, nil}
+
+      true ->
+        freqs = Enum.frequencies(list)
+        max_freq = freqs |> Map.values() |> Enum.max()
+
+        modes =
+          freqs
+          |> Enum.filter(fn {_, f} -> f == max_freq end)
+          |> Enum.map(&elem(&1, 0))
+          |> Enum.sort()
+
+        {:ok, modes}
+    end
+  end
+
+  defp dispatch("mode", args), do: arity_error("mode", 1, args)
+
+  # --- Random ---
+  defp dispatch("random", []), do: {:ok, :rand.uniform()}
+
+  # --- Regex matching ---
+  defp dispatch("matches", [nil, _]), do: {:ok, nil}
+  defp dispatch("matches", [_, nil]), do: {:ok, nil}
+
+  defp dispatch("matches", [s, pattern]) when is_binary(s) and is_binary(pattern) do
+    case Regex.compile(pattern) do
+      {:ok, regex} -> {:ok, Regex.match?(regex, s)}
+      {:error, _} -> {:error, "matches: invalid regex pattern #{inspect(pattern)}"}
+    end
+  end
+
+  defp dispatch("matches", args), do: arity_error("matches", 2, args)
+
+  # --- String join ---
+  defp dispatch("string join", [nil]), do: {:ok, nil}
+  defp dispatch("string join", [nil, _]), do: {:ok, nil}
+
+  defp dispatch("string join", [list]) when is_list(list) do
+    if Enum.any?(list, &(not is_binary(&1) and not is_nil(&1))) do
+      {:error, "string join: all elements must be strings"}
+    else
+      {:ok, list |> Enum.reject(&is_nil/1) |> Enum.join()}
+    end
+  end
+
+  defp dispatch("string join", [list, delim]) when is_list(list) and is_binary(delim) do
+    if Enum.any?(list, &(not is_binary(&1) and not is_nil(&1))) do
+      {:error, "string join: all elements must be strings"}
+    else
+      {:ok, list |> Enum.reject(&is_nil/1) |> Enum.join(delim)}
+    end
+  end
+
+  defp dispatch("string join", args) when length(args) not in [1, 2] do
+    arity_error("string join", "1 or 2", args)
+  end
+
   # --- Unknown function ---
   defp dispatch(name, _args) do
     {:error, "unknown FEEL function: #{name}"}
@@ -500,4 +648,18 @@ defmodule RodarFeel.Functions do
 
   defp format_seconds(s) when is_float(s), do: :erlang.float_to_binary(s, decimals: 1)
   defp format_seconds(s), do: Integer.to_string(s)
+
+  defp parse_number_string(s) do
+    case Float.parse(s) do
+      {f, ""} ->
+        # Return integer if no fractional part
+        if trunc(f) == f and not String.contains?(s, "."), do: {:ok, trunc(f)}, else: {:ok, f}
+
+      _ ->
+        case Integer.parse(s) do
+          {n, ""} -> {:ok, n}
+          _ -> :error
+        end
+    end
+  end
 end

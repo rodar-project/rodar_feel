@@ -145,7 +145,8 @@ defmodule RodarFeel.Parser do
       string("distinct values") |> concat(word_boundary),
       string("list contains") |> concat(word_boundary),
       string("index of") |> concat(word_boundary),
-      string("date and time") |> concat(word_boundary)
+      string("date and time") |> concat(word_boundary),
+      string("string join") |> concat(word_boundary)
     ])
     |> ignore(ws)
     |> ignore(ascii_char([?(]))
@@ -312,6 +313,23 @@ defmodule RodarFeel.Parser do
     )
     |> reduce(:build_path_or_ident)
 
+  # --- Lambda / user-defined function ---
+  # `function(x, y) x + y`
+  lambda_expr =
+    ignore(string("function"))
+    |> ignore(ws)
+    |> ignore(ascii_char([?(]))
+    |> ignore(ws)
+    |> optional(
+      identifier
+      |> repeat(ignore(ws) |> ignore(ascii_char([?,])) |> ignore(ws) |> concat(identifier))
+    )
+    |> ignore(ws)
+    |> ignore(ascii_char([?)]))
+    |> ignore(ws)
+    |> parsec(:expr)
+    |> reduce(:build_lambda)
+
   # --- Primary expression (NO trailing ws consumed) ---
   primary =
     ignore(ws)
@@ -323,6 +341,7 @@ defmodule RodarFeel.Parser do
       for_expr,
       some_expr,
       every_expr,
+      lambda_expr,
       temporal_literal,
       number_literal |> reduce(:wrap_literal),
       string_literal |> reduce(:wrap_literal),
@@ -434,6 +453,29 @@ defmodule RodarFeel.Parser do
         |> ignore(ascii_string([?\s, ?\t], min: 1))
         |> parsec(:addition)
         |> reduce(:mark_between),
+        # `instance of` type check
+        ignore(ws)
+        |> ignore(string("instance"))
+        |> ignore(ascii_string([?\s, ?\t], min: 1))
+        |> ignore(string("of"))
+        |> ignore(ascii_string([?\s, ?\t], min: 1))
+        |> choice([
+          string("years and months duration") |> replace("years and months duration"),
+          string("days and time duration") |> replace("days and time duration"),
+          string("date and time") |> replace("date and time"),
+          string("number") |> replace("number"),
+          string("string") |> replace("string"),
+          string("boolean") |> replace("boolean"),
+          string("date") |> replace("date"),
+          string("time") |> replace("time"),
+          string("duration") |> replace("duration"),
+          string("list") |> replace("list"),
+          string("context") |> replace("context"),
+          string("null") |> replace("null"),
+          string("function") |> replace("function"),
+          string("any") |> replace("any")
+        ])
+        |> reduce(:mark_instance_of),
         # `in` operator with range or list/expr
         ignore(ws)
         |> ignore(string("in"))
@@ -733,6 +775,12 @@ defmodule RodarFeel.Parser do
   def build_singleword_funcall([name | args]), do: {:funcall, name, args}
 
   @doc false
+  def build_lambda(parts) do
+    {params, [body]} = Enum.split_while(parts, &is_binary/1)
+    {:lambda, params, body}
+  end
+
+  @doc false
   def build_neg([expr]), do: {:unary, :-, expr}
 
   @doc false
@@ -748,10 +796,14 @@ defmodule RodarFeel.Parser do
   def mark_between([low, high]), do: {:between_rhs, low, high}
 
   @doc false
+  def mark_instance_of([type_name]), do: {:instance_of_rhs, type_name}
+
+  @doc false
   def build_comparison(parts) do
     case parts do
       [left, {:in_rhs, rhs}] -> {:in, left, rhs}
       [left, {:between_rhs, low, high}] -> {:between, left, low, high}
+      [left, {:instance_of_rhs, type_name}] -> {:instance_of, left, type_name}
       [left, op, right] -> {:binop, op, left, right}
       [single] -> single
     end

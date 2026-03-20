@@ -162,6 +162,18 @@ defmodule RodarFeel.Evaluator do
     end
   end
 
+  # --- Instance of ---
+  defp eval_node({:instance_of, expr_ast, type_name}, bindings) do
+    with {:ok, val} <- eval_node(expr_ast, bindings) do
+      {:ok, check_type(val, type_name)}
+    end
+  end
+
+  # --- Lambda definition ---
+  defp eval_node({:lambda, params, body}, bindings) do
+    {:ok, {:feel_function, params, body, bindings}}
+  end
+
   # --- Range ---
   defp eval_node({:range, from_ast, to_ast}, bindings) do
     with {:ok, from} <- eval_node(from_ast, bindings),
@@ -216,7 +228,14 @@ defmodule RodarFeel.Evaluator do
   # --- Function calls ---
   defp eval_node({:funcall, name, arg_asts}, bindings) do
     with {:ok, args} <- eval_args(arg_asts, bindings, []) do
-      Functions.call(name, args)
+      # Check if name resolves to a lambda in bindings
+      case resolve_path([name], bindings) do
+        {:feel_function, params, body, closure} ->
+          invoke_lambda(params, body, closure, args)
+
+        _ ->
+          Functions.call(name, args)
+      end
     end
   end
 
@@ -710,5 +729,42 @@ defmodule RodarFeel.Evaluator do
 
     dur = %Duration{days: days, hours: hours, minutes: minutes, seconds: seconds}
     if total_seconds < 0, do: Duration.negate(dur), else: dur
+  end
+
+  # --- Instance of type checking ---
+
+  defp check_type(_, "any"), do: true
+  defp check_type(nil, "null"), do: true
+  defp check_type(nil, _), do: false
+  defp check_type(v, "number") when is_number(v), do: true
+  defp check_type(v, "string") when is_binary(v), do: true
+  defp check_type(v, "boolean") when is_boolean(v), do: true
+  defp check_type(%Date{}, "date"), do: true
+  defp check_type(%Time{}, "time"), do: true
+  defp check_type(%NaiveDateTime{}, "date and time"), do: true
+
+  defp check_type(%Duration{} = d, "duration"),
+    do: Duration.year_month?(d) or Duration.day_time?(d)
+
+  defp check_type(%Duration{} = d, "years and months duration"), do: Duration.year_month?(d)
+  defp check_type(%Duration{} = d, "days and time duration"), do: Duration.day_time?(d)
+  defp check_type(v, "list") when is_list(v), do: true
+  defp check_type(v, "context") when is_map(v) and not is_struct(v), do: true
+  defp check_type({:feel_function, _, _, _}, "function"), do: true
+  defp check_type(_, _), do: false
+
+  # --- Lambda invocation ---
+
+  defp invoke_lambda(params, body, closure, args) do
+    if length(params) != length(args) do
+      {:error, "function expected #{length(params)} argument(s), got #{length(args)}"}
+    else
+      local_bindings =
+        params
+        |> Enum.zip(args)
+        |> Enum.reduce(closure, fn {name, val}, acc -> Map.put(acc, name, val) end)
+
+      eval_node(body, local_bindings)
+    end
   end
 end

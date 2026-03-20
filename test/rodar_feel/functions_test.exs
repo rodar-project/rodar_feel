@@ -147,6 +147,171 @@ defmodule RodarFeel.FunctionsTest do
     end
   end
 
+  describe "new string functions" do
+    test "split" do
+      assert {:ok, ["a", "b", "c"]} = Functions.call("split", ["a,b,c", ","])
+      assert {:ok, ["hello"]} = Functions.call("split", ["hello", ","])
+    end
+
+    test "substring before" do
+      assert {:ok, "hello"} = Functions.call("substring before", ["hello world", " "])
+      assert {:ok, ""} = Functions.call("substring before", ["hello", " "])
+    end
+
+    test "substring after" do
+      assert {:ok, "world"} = Functions.call("substring after", ["hello world", " "])
+      assert {:ok, ""} = Functions.call("substring after", ["hello", " "])
+    end
+
+    test "replace" do
+      assert {:ok, "herro"} = Functions.call("replace", ["hello", "l", "r"])
+      assert {:ok, "hello"} = Functions.call("replace", ["hello", "x", "y"])
+    end
+
+    test "trim" do
+      assert {:ok, "hello"} = Functions.call("trim", ["  hello  "])
+      assert {:ok, "hello"} = Functions.call("trim", ["hello"])
+    end
+
+    test "null propagation for new string functions" do
+      assert {:ok, nil} = Functions.call("split", [nil, ","])
+      assert {:ok, nil} = Functions.call("split", ["a", nil])
+      assert {:ok, nil} = Functions.call("substring before", [nil, " "])
+      assert {:ok, nil} = Functions.call("substring after", [nil, " "])
+      assert {:ok, nil} = Functions.call("replace", [nil, "a", "b"])
+      assert {:ok, nil} = Functions.call("replace", ["a", nil, "b"])
+      assert {:ok, nil} = Functions.call("replace", ["a", "a", nil])
+      assert {:ok, nil} = Functions.call("trim", [nil])
+    end
+  end
+
+  describe "list functions" do
+    test "append" do
+      assert {:ok, [1, 2, 3]} = Functions.call("append", [[1, 2], 3])
+    end
+
+    test "concatenate" do
+      assert {:ok, [1, 2, 3]} = Functions.call("concatenate", [[1], [2], [3]])
+      assert {:ok, [1, 2, 3, 4]} = Functions.call("concatenate", [[1, 2], [3, 4]])
+    end
+
+    test "reverse" do
+      assert {:ok, [3, 2, 1]} = Functions.call("reverse", [[1, 2, 3]])
+      assert {:ok, []} = Functions.call("reverse", [[]])
+    end
+
+    test "flatten" do
+      assert {:ok, [1, 2, 3, 4]} = Functions.call("flatten", [[[1, 2], [3, [4]]]])
+    end
+
+    test "distinct values" do
+      assert {:ok, [1, 2, 3]} = Functions.call("distinct values", [[1, 2, 1, 3]])
+    end
+
+    test "sort" do
+      assert {:ok, [1, 2, 3]} = Functions.call("sort", [[3, 1, 2]])
+    end
+
+    test "index of" do
+      assert {:ok, [2, 4]} = Functions.call("index of", [[1, 2, 3, 2], 2])
+      assert {:ok, []} = Functions.call("index of", [[1, 2, 3], 5])
+    end
+
+    test "list contains" do
+      assert {:ok, true} = Functions.call("list contains", [[1, 2, 3], 2])
+      assert {:ok, false} = Functions.call("list contains", [[1, 2, 3], 5])
+    end
+
+    test "null propagation for list functions" do
+      assert {:ok, nil} = Functions.call("append", [nil, 1])
+      assert {:ok, nil} = Functions.call("concatenate", [nil, [1]])
+      assert {:ok, nil} = Functions.call("reverse", [nil])
+      assert {:ok, nil} = Functions.call("flatten", [nil])
+      assert {:ok, nil} = Functions.call("distinct values", [nil])
+      assert {:ok, nil} = Functions.call("sort", [nil])
+      assert {:ok, nil} = Functions.call("index of", [nil, 1])
+      assert {:ok, nil} = Functions.call("list contains", [nil, 1])
+    end
+  end
+
+  describe "conversion functions" do
+    test "string from number" do
+      assert {:ok, "42"} = Functions.call("string", [42])
+      assert {:ok, "3.14"} = Functions.call("string", [3.14])
+    end
+
+    test "string from boolean" do
+      assert {:ok, "true"} = Functions.call("string", [true])
+      assert {:ok, "false"} = Functions.call("string", [false])
+    end
+
+    test "string from string (identity)" do
+      assert {:ok, "hello"} = Functions.call("string", ["hello"])
+    end
+
+    test "string from nil" do
+      assert {:ok, nil} = Functions.call("string", [nil])
+    end
+
+    test "string from list" do
+      assert {:ok, "[1, 2, 3]"} = Functions.call("string", [[1, 2, 3]])
+    end
+  end
+
+  describe "boolean aggregate functions" do
+    test "all with all true" do
+      assert {:ok, true} = Functions.call("all", [[true, true, true]])
+    end
+
+    test "all with some false" do
+      assert {:ok, false} = Functions.call("all", [[true, false, true]])
+    end
+
+    test "all three-valued with nil" do
+      assert {:ok, nil} = Functions.call("all", [[true, nil, true]])
+      assert {:ok, false} = Functions.call("all", [[false, nil, true]])
+    end
+
+    test "any with some true" do
+      assert {:ok, true} = Functions.call("any", [[false, true, false]])
+    end
+
+    test "any with all false" do
+      assert {:ok, false} = Functions.call("any", [[false, false, false]])
+    end
+
+    test "any three-valued with nil" do
+      assert {:ok, nil} = Functions.call("any", [[false, nil, false]])
+      assert {:ok, true} = Functions.call("any", [[true, nil, false]])
+    end
+  end
+
+  describe "new numeric functions" do
+    test "product" do
+      assert {:ok, 24} = Functions.call("product", [[1, 2, 3, 4]])
+      assert {:ok, 1} = Functions.call("product", [[]])
+    end
+
+    test "product with nil" do
+      assert {:ok, nil} = Functions.call("product", [nil])
+      assert {:ok, nil} = Functions.call("product", [[1, nil, 3]])
+    end
+
+    test "mean" do
+      {:ok, result} = Functions.call("mean", [[1, 2, 3]])
+      assert_in_delta result, 2.0, 0.001
+    end
+
+    test "mean of empty list" do
+      assert {:ok, nil} = Functions.call("mean", [[]])
+    end
+
+    test "mean with nil" do
+      assert {:ok, nil} = Functions.call("mean", [nil])
+      assert {:ok, nil} = Functions.call("mean", [[1, nil, 3]])
+    end
+  end
+
   describe "error cases" do
     test "unknown function returns error" do
       assert {:error, "unknown FEEL function: foobar"} = Functions.call("foobar", [42])

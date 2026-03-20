@@ -3,15 +3,21 @@ defmodule RodarFeel.Functions do
   Built-in FEEL function implementations.
 
   Dispatches on `{name_string, args_list}`. Implements null propagation:
-  if any argument is `nil`, the result is `nil` (except for `is null` and `not`).
+  if any argument is `nil`, the result is `nil` (except for `is null`, `not`,
+  `all`, `any`, and `string`).
 
   ## Supported functions
 
-  - Numeric: `abs/1`, `floor/1`, `ceiling/1`, `round/1-2`, `min/1`, `max/1`, `sum/1`, `count/1`
+  - Numeric: `abs/1`, `floor/1`, `ceiling/1`, `round/1-2`, `min/1`, `max/1`,
+    `sum/1`, `count/1`, `product/1`, `mean/1`
   - String: `string length/1`, `contains/2`, `starts with/2`, `ends with/2`,
-    `upper case/1`, `lower case/1`, `substring/2-3`
-  - Boolean: `not/1`
+    `upper case/1`, `lower case/1`, `substring/2-3`, `split/2`,
+    `substring before/2`, `substring after/2`, `replace/3`, `trim/1`
+  - Boolean: `not/1`, `all/1`, `any/1`
   - Null: `is null/1`
+  - List: `append/2`, `concatenate/2+`, `reverse/1`, `flatten/1`,
+    `distinct values/1`, `sort/1`, `index of/2`, `list contains/2`
+  - Conversion: `string/1`
 
   ## Examples
 
@@ -43,11 +49,36 @@ defmodule RodarFeel.Functions do
   defp dispatch("is null", [val]), do: {:ok, is_nil(val)}
   defp dispatch("is null", args), do: arity_error("is null", 1, args)
 
-  # --- Boolean not (no null propagation) ---
+  # --- Boolean not (no null propagation for nil) ---
   defp dispatch("not", [nil]), do: {:ok, nil}
   defp dispatch("not", [val]) when is_boolean(val), do: {:ok, not val}
   defp dispatch("not", [_]), do: {:error, "not: argument must be boolean"}
   defp dispatch("not", args), do: arity_error("not", 1, args)
+
+  # --- Boolean all/any (three-valued, no simple null propagation) ---
+  defp dispatch("all", [nil]), do: {:ok, nil}
+
+  defp dispatch("all", [list]) when is_list(list) do
+    cond do
+      Enum.any?(list, &(&1 == false)) -> {:ok, false}
+      Enum.any?(list, &is_nil/1) -> {:ok, nil}
+      true -> {:ok, true}
+    end
+  end
+
+  defp dispatch("all", args), do: arity_error("all", 1, args)
+
+  defp dispatch("any", [nil]), do: {:ok, nil}
+
+  defp dispatch("any", [list]) when is_list(list) do
+    cond do
+      Enum.any?(list, &(&1 == true)) -> {:ok, true}
+      Enum.any?(list, &is_nil/1) -> {:ok, nil}
+      true -> {:ok, false}
+    end
+  end
+
+  defp dispatch("any", args), do: arity_error("any", 1, args)
 
   # --- Numeric functions (with null propagation) ---
   defp dispatch("abs", [nil]), do: {:ok, nil}
@@ -103,6 +134,30 @@ defmodule RodarFeel.Functions do
   defp dispatch("count", [nil]), do: {:ok, nil}
   defp dispatch("count", [list]) when is_list(list), do: {:ok, length(list)}
   defp dispatch("count", args), do: arity_error("count", 1, args)
+
+  defp dispatch("product", [nil]), do: {:ok, nil}
+
+  defp dispatch("product", [list]) when is_list(list) do
+    if Enum.any?(list, &is_nil/1) do
+      {:ok, nil}
+    else
+      {:ok, Enum.reduce(list, 1, &(&1 * &2))}
+    end
+  end
+
+  defp dispatch("product", args), do: arity_error("product", 1, args)
+
+  defp dispatch("mean", [nil]), do: {:ok, nil}
+
+  defp dispatch("mean", [list]) when is_list(list) do
+    cond do
+      list == [] -> {:ok, nil}
+      Enum.any?(list, &is_nil/1) -> {:ok, nil}
+      true -> {:ok, Enum.sum(list) / length(list)}
+    end
+  end
+
+  defp dispatch("mean", args), do: arity_error("mean", 1, args)
 
   # --- String functions (with null propagation) ---
   defp dispatch("string length", [nil]), do: {:ok, nil}
@@ -164,6 +219,138 @@ defmodule RodarFeel.Functions do
     arity_error("substring", "2-3", args)
   end
 
+  defp dispatch("split", [nil, _]), do: {:ok, nil}
+  defp dispatch("split", [_, nil]), do: {:ok, nil}
+
+  defp dispatch("split", [s, delim]) when is_binary(s) and is_binary(delim) do
+    {:ok, String.split(s, delim)}
+  end
+
+  defp dispatch("split", args), do: arity_error("split", 2, args)
+
+  defp dispatch("substring before", [nil, _]), do: {:ok, nil}
+  defp dispatch("substring before", [_, nil]), do: {:ok, nil}
+
+  defp dispatch("substring before", [s, match]) when is_binary(s) and is_binary(match) do
+    case String.split(s, match, parts: 2) do
+      [before, _] -> {:ok, before}
+      [_] -> {:ok, ""}
+    end
+  end
+
+  defp dispatch("substring before", args), do: arity_error("substring before", 2, args)
+
+  defp dispatch("substring after", [nil, _]), do: {:ok, nil}
+  defp dispatch("substring after", [_, nil]), do: {:ok, nil}
+
+  defp dispatch("substring after", [s, match]) when is_binary(s) and is_binary(match) do
+    case String.split(s, match, parts: 2) do
+      [_, after_part] -> {:ok, after_part}
+      [_] -> {:ok, ""}
+    end
+  end
+
+  defp dispatch("substring after", args), do: arity_error("substring after", 2, args)
+
+  defp dispatch("replace", [nil, _, _]), do: {:ok, nil}
+  defp dispatch("replace", [_, nil, _]), do: {:ok, nil}
+  defp dispatch("replace", [_, _, nil]), do: {:ok, nil}
+
+  defp dispatch("replace", [s, pattern, replacement])
+       when is_binary(s) and is_binary(pattern) and is_binary(replacement) do
+    {:ok, String.replace(s, pattern, replacement)}
+  end
+
+  defp dispatch("replace", args), do: arity_error("replace", 3, args)
+
+  defp dispatch("trim", [nil]), do: {:ok, nil}
+  defp dispatch("trim", [s]) when is_binary(s), do: {:ok, String.trim(s)}
+  defp dispatch("trim", args), do: arity_error("trim", 1, args)
+
+  # --- Conversion functions ---
+  defp dispatch("string", [nil]), do: {:ok, nil}
+  defp dispatch("string", [s]) when is_binary(s), do: {:ok, s}
+  defp dispatch("string", [n]) when is_number(n), do: {:ok, to_string(n)}
+  defp dispatch("string", [b]) when is_boolean(b), do: {:ok, to_string(b)}
+
+  defp dispatch("string", [list]) when is_list(list) do
+    inner = Enum.map_join(list, ", ", &format_value/1)
+    {:ok, "[#{inner}]"}
+  end
+
+  defp dispatch("string", [map]) when is_map(map) do
+    inner =
+      map
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.map_join(", ", fn {k, v} -> "#{k}: #{format_value(v)}" end)
+
+    {:ok, "{#{inner}}"}
+  end
+
+  defp dispatch("string", args), do: arity_error("string", 1, args)
+
+  # --- List functions ---
+  defp dispatch("append", [nil, _]), do: {:ok, nil}
+
+  defp dispatch("append", [list, item]) when is_list(list) do
+    {:ok, list ++ [item]}
+  end
+
+  defp dispatch("append", args), do: arity_error("append", 2, args)
+
+  defp dispatch("concatenate", args) when is_list(args) and length(args) >= 2 do
+    if Enum.any?(args, &is_nil/1) do
+      {:ok, nil}
+    else
+      if Enum.all?(args, &is_list/1) do
+        {:ok, Enum.concat(args)}
+      else
+        {:error, "concatenate: all arguments must be lists"}
+      end
+    end
+  end
+
+  defp dispatch("concatenate", args), do: arity_error("concatenate", "2+", args)
+
+  defp dispatch("reverse", [nil]), do: {:ok, nil}
+  defp dispatch("reverse", [list]) when is_list(list), do: {:ok, Enum.reverse(list)}
+  defp dispatch("reverse", args), do: arity_error("reverse", 1, args)
+
+  defp dispatch("flatten", [nil]), do: {:ok, nil}
+  defp dispatch("flatten", [list]) when is_list(list), do: {:ok, List.flatten(list)}
+  defp dispatch("flatten", args), do: arity_error("flatten", 1, args)
+
+  defp dispatch("distinct values", [nil]), do: {:ok, nil}
+  defp dispatch("distinct values", [list]) when is_list(list), do: {:ok, Enum.uniq(list)}
+  defp dispatch("distinct values", args), do: arity_error("distinct values", 1, args)
+
+  defp dispatch("sort", [nil]), do: {:ok, nil}
+  defp dispatch("sort", [list]) when is_list(list), do: {:ok, Enum.sort(list)}
+  defp dispatch("sort", args), do: arity_error("sort", 1, args)
+
+  defp dispatch("index of", [nil, _]), do: {:ok, nil}
+  defp dispatch("index of", [_, nil]), do: {:ok, nil}
+
+  defp dispatch("index of", [list, match]) when is_list(list) do
+    indices =
+      list
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {elem, _idx} -> elem == match end)
+      |> Enum.map(&elem(&1, 1))
+
+    {:ok, indices}
+  end
+
+  defp dispatch("index of", args), do: arity_error("index of", 2, args)
+
+  defp dispatch("list contains", [nil, _]), do: {:ok, nil}
+
+  defp dispatch("list contains", [list, element]) when is_list(list) do
+    {:ok, Enum.member?(list, element)}
+  end
+
+  defp dispatch("list contains", args), do: arity_error("list contains", 2, args)
+
   # --- Unknown function ---
   defp dispatch(name, _args) do
     {:error, "unknown FEEL function: #{name}"}
@@ -172,4 +359,16 @@ defmodule RodarFeel.Functions do
   defp arity_error(name, expected, args) do
     {:error, "#{name}: expected #{expected} argument(s), got #{length(args)}"}
   end
+
+  defp format_value(nil), do: "null"
+  defp format_value(s) when is_binary(s), do: "\"#{s}\""
+  defp format_value(b) when is_boolean(b), do: to_string(b)
+  defp format_value(n) when is_number(n), do: to_string(n)
+
+  defp format_value(list) when is_list(list) do
+    inner = Enum.map_join(list, ", ", &format_value/1)
+    "[#{inner}]"
+  end
+
+  defp format_value(other), do: inspect(other)
 end

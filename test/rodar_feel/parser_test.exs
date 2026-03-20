@@ -235,6 +235,95 @@ defmodule RodarFeel.ParserTest do
     end
   end
 
+  describe "multi-word function calls (new)" do
+    test "parses substring before" do
+      {:ok, ast} = Parser.parse(~S|substring before("hello world", " ")|)
+      assert {:funcall, "substring before", [{:literal, "hello world"}, {:literal, " "}]} = ast
+    end
+
+    test "parses substring after" do
+      {:ok, ast} = Parser.parse(~S|substring after("hello world", " ")|)
+      assert {:funcall, "substring after", [{:literal, "hello world"}, {:literal, " "}]} = ast
+    end
+
+    test "parses distinct values" do
+      {:ok, ast} = Parser.parse("distinct values([1, 2, 1])")
+      assert {:funcall, "distinct values", [{:list, _}]} = ast
+    end
+
+    test "parses list contains" do
+      {:ok, ast} = Parser.parse("list contains([1, 2], 2)")
+      assert {:funcall, "list contains", [{:list, _}, {:literal, 2}]} = ast
+    end
+
+    test "parses index of" do
+      {:ok, ast} = Parser.parse("index of([1, 2, 3], 2)")
+      assert {:funcall, "index of", [{:list, _}, {:literal, 2}]} = ast
+    end
+  end
+
+  describe "context literals" do
+    test "parses empty context" do
+      assert {:ok, {:context, []}} = Parser.parse("{}")
+    end
+
+    test "parses context with identifier keys" do
+      {:ok, ast} = Parser.parse("{a: 1, b: 2}")
+      assert {:context, [{"a", {:literal, 1}}, {"b", {:literal, 2}}]} = ast
+    end
+
+    test "parses context with string keys" do
+      {:ok, ast} = Parser.parse(~S({"name": "Alice"}))
+      assert {:context, [{"name", {:literal, "Alice"}}]} = ast
+    end
+  end
+
+  describe "between operator" do
+    test "parses between expression" do
+      {:ok, ast} = Parser.parse("x between 1 and 10")
+      assert {:between, {:path, ["x"]}, {:literal, 1}, {:literal, 10}} = ast
+    end
+  end
+
+  describe "for-in-return" do
+    test "parses for expression" do
+      {:ok, ast} = Parser.parse("for x in [1, 2] return x + 1")
+
+      assert {:for, [{"x", {:list, [{:literal, 1}, {:literal, 2}]}}],
+              {:binop, :+, {:path, ["x"]}, {:literal, 1}}} = ast
+    end
+  end
+
+  describe "quantified expressions" do
+    test "parses some expression" do
+      {:ok, ast} = Parser.parse("some x in items satisfies x > 0")
+
+      assert {:some, [{"x", {:path, ["items"]}}], {:binop, :>, {:path, ["x"]}, {:literal, 0}}} =
+               ast
+    end
+
+    test "parses every expression" do
+      {:ok, ast} = Parser.parse("every x in items satisfies x > 0")
+
+      assert {:every, [{"x", {:path, ["items"]}}], {:binop, :>, {:path, ["x"]}, {:literal, 0}}} =
+               ast
+    end
+  end
+
+  describe "keyword safety" do
+    test "for does not match identifiers starting with for" do
+      assert {:ok, {:path, ["format"]}} = Parser.parse("format")
+    end
+
+    test "some does not match identifiers starting with some" do
+      assert {:ok, {:path, ["something"]}} = Parser.parse("something")
+    end
+
+    test "every does not match identifiers starting with every" do
+      assert {:ok, {:path, ["everywhere"]}} = Parser.parse("everywhere")
+    end
+  end
+
   describe "error cases" do
     test "returns error for incomplete expression" do
       assert {:error, _} = Parser.parse("1 +")

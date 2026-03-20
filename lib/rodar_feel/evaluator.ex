@@ -12,7 +12,11 @@ defmodule RodarFeel.Evaluator do
   - **String `+`:** If both operands are strings, concatenate; if both are numbers, add
   - **Path resolution:** `order.status` resolves to `bindings["order"]["status"]`
   - **`in` operator:** Check list membership or range inclusion
+  - **`between` operator:** `x between a and b` is `a <= x and x <= b`
   - **Bracket access:** `a["key"]` resolves `a` then accesses string key
+  - **Context literals:** `{a: 1, b: 2}` evaluates to `%{"a" => 1, "b" => 2}`
+  - **For-in-return:** `for x in list return x + 1` iterates and collects results
+  - **Quantified:** `some/every x in list satisfies condition`
 
   ## Examples
 
@@ -61,6 +65,11 @@ defmodule RodarFeel.Evaluator do
   # --- List ---
   defp eval_node({:list, items}, bindings), do: eval_list(items, bindings, [])
 
+  # --- Context literal ---
+  defp eval_node({:context, entries}, bindings) do
+    eval_context(entries, bindings, %{})
+  end
+
   # --- If-then-else ---
   defp eval_node({:if, cond_ast, then_ast, else_ast}, bindings) do
     with {:ok, cond_val} <- eval_node(cond_ast, bindings) do
@@ -80,12 +89,35 @@ defmodule RodarFeel.Evaluator do
     end
   end
 
+  # --- Between operator ---
+  defp eval_node({:between, expr_ast, low_ast, high_ast}, bindings) do
+    with {:ok, val} <- eval_node(expr_ast, bindings),
+         {:ok, low} <- eval_node(low_ast, bindings),
+         {:ok, high} <- eval_node(high_ast, bindings) do
+      eval_between(val, low, high)
+    end
+  end
+
   # --- Range ---
   defp eval_node({:range, from_ast, to_ast}, bindings) do
     with {:ok, from} <- eval_node(from_ast, bindings),
          {:ok, to} <- eval_node(to_ast, bindings) do
       {:ok, {:range_value, from, to}}
     end
+  end
+
+  # --- For-in-return ---
+  defp eval_node({:for, iterations, body}, bindings) do
+    eval_for(iterations, body, bindings)
+  end
+
+  # --- Quantified expressions ---
+  defp eval_node({:some, iterations, condition}, bindings) do
+    eval_some(iterations, condition, bindings)
+  end
+
+  defp eval_node({:every, iterations, condition}, bindings) do
+    eval_every(iterations, condition, bindings)
   end
 
   # --- Unary operators ---
@@ -169,6 +201,110 @@ defmodule RodarFeel.Evaluator do
     with {:ok, val} <- eval_node(arg, bindings) do
       eval_args(rest, bindings, [val | acc])
     end
+  end
+
+  # --- Context evaluation ---
+  defp eval_context([], _bindings, acc), do: {:ok, acc}
+
+  defp eval_context([{key, expr} | rest], bindings, acc) do
+    with {:ok, val} <- eval_node(expr, Map.merge(bindings, acc)) do
+      eval_context(rest, bindings, Map.put(acc, key, val))
+    end
+  end
+
+  # --- Between evaluation ---
+  defp eval_between(nil, _low, _high), do: {:ok, nil}
+  defp eval_between(_val, nil, _high), do: {:ok, nil}
+  defp eval_between(_val, _low, nil), do: {:ok, nil}
+
+  defp eval_between(val, low, high) do
+    {:ok, val >= low and val <= high}
+  end
+
+  # --- For-in-return evaluation ---
+  defp eval_for(iterations, body, bindings) do
+    eval_for_loop(iterations, body, bindings, [bindings])
+  end
+
+  defp eval_for_loop([], body, _bindings, binding_sets) do
+    results =
+      Enum.flat_map(binding_sets, fn b ->
+        case eval_node(body, b) do
+          {:ok, val} -> [val]
+          _ -> []
+        end
+      end)
+
+    {:ok, results}
+  end
+
+  defp eval_for_loop([{var, collection_ast} | rest], body, bindings, binding_sets) do
+    new_binding_sets = expand_binding_sets(binding_sets, var, collection_ast)
+    eval_for_loop(rest, body, bindings, new_binding_sets)
+  end
+
+  # --- Quantified expression evaluation ---
+  defp eval_some(iterations, condition, bindings) do
+    eval_some_loop(iterations, condition, bindings, [bindings])
+  end
+
+  defp eval_some_loop([], condition, _bindings, binding_sets) do
+    results = collect_condition_results(binding_sets, condition)
+
+    cond do
+      Enum.any?(results, &(&1 == true)) -> {:ok, true}
+      Enum.any?(results, &is_nil/1) -> {:ok, nil}
+      true -> {:ok, false}
+    end
+  end
+
+  defp eval_some_loop([{var, collection_ast} | rest], condition, bindings, binding_sets) do
+    new_binding_sets = expand_binding_sets(binding_sets, var, collection_ast)
+    eval_some_loop(rest, condition, bindings, new_binding_sets)
+  end
+
+  defp eval_every(iterations, condition, bindings) do
+    eval_every_loop(iterations, condition, bindings, [bindings])
+  end
+
+  defp eval_every_loop([], condition, _bindings, binding_sets) do
+    results = collect_condition_results(binding_sets, condition)
+
+    cond do
+      Enum.any?(results, &(&1 == false)) -> {:ok, false}
+      Enum.any?(results, &is_nil/1) -> {:ok, nil}
+      true -> {:ok, true}
+    end
+  end
+
+  defp eval_every_loop([{var, collection_ast} | rest], condition, bindings, binding_sets) do
+    new_binding_sets = expand_binding_sets(binding_sets, var, collection_ast)
+    eval_every_loop(rest, condition, bindings, new_binding_sets)
+  end
+
+  defp expand_binding_sets(binding_sets, var, collection_ast) do
+    Enum.flat_map(binding_sets, fn b ->
+      expand_single_binding(b, var, collection_ast)
+    end)
+  end
+
+  defp expand_single_binding(b, var, collection_ast) do
+    case eval_node(collection_ast, b) do
+      {:ok, list} when is_list(list) ->
+        Enum.map(list, fn item -> Map.put(b, var, item) end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp collect_condition_results(binding_sets, condition) do
+    Enum.map(binding_sets, fn b ->
+      case eval_node(condition, b) do
+        {:ok, val} -> val
+        _ -> nil
+      end
+    end)
   end
 
   # --- Unary helpers ---

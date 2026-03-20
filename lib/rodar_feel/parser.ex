@@ -9,12 +9,13 @@ defmodule RodarFeel.Parser do
 
   1. `or`
   2. `and`
-  3. Comparison (`=`, `!=`, `<`, `>`, `<=`, `>=`) and `in`
+  3. Comparison (`=`, `!=`, `<`, `>`, `<=`, `>=`), `in`, and `between`
   4. Addition (`+`, `-`)
   5. Multiplication (`*`, `/`, `%`)
   6. Exponentiation (`**`)
   7. Unary (`-`, `not`)
-  8. Primary (literals, parens, if-then-else, function calls, paths, lists, bracket access)
+  8. Primary (literals, parens, if-then-else, for-in-return, some/every,
+     function calls, paths, lists, context literals, bracket access)
 
   ## AST node types
 
@@ -25,9 +26,14 @@ defmodule RodarFeel.Parser do
   - `{:bracket, base, index}` -- bracket access
   - `{:if, condition, then_expr, else_expr}`
   - `{:in, expr, collection_or_range}`
+  - `{:between, expr, low, high}`
   - `{:range, from, to}`
   - `{:list, [items]}`
+  - `{:context, [{key, expr}, ...]}`
   - `{:funcall, name, [args]}`
+  - `{:for, [{var, collection}], body}`
+  - `{:some, [{var, collection}], condition}`
+  - `{:every, [{var, collection}], condition}`
 
   ## Examples
 
@@ -44,8 +50,30 @@ defmodule RodarFeel.Parser do
 
   import NimbleParsec
 
-  # --- Whitespace (optional) ---
-  ws = ascii_string([?\s, ?\t, ?\n, ?\r], min: 0)
+  # --- Whitespace (optional, with comment support) ---
+  # Single-line comment: // to end of line
+  single_line_comment =
+    string("//")
+    |> repeat(utf8_char(not: ?\n, not: ?\r))
+    |> optional(choice([string("\r\n"), string("\n"), string("\r")]))
+
+  # Multi-line comment: /* ... */
+  multi_line_comment =
+    string("/*")
+    |> repeat(
+      lookahead_not(string("*/"))
+      |> utf8_char([])
+    )
+    |> string("*/")
+
+  ws =
+    repeat(
+      choice([
+        ascii_char([?\s, ?\t, ?\n, ?\r]),
+        single_line_comment,
+        multi_line_comment
+      ])
+    )
 
   # Word boundary: lookahead for non-identifier char (space, operator, eof, etc.)
   word_boundary = lookahead_not(ascii_char([?a..?z, ?A..?Z, ?0..?9, ?_]))
@@ -90,15 +118,19 @@ defmodule RodarFeel.Parser do
     |> reduce(:build_identifier)
 
   # --- Multi-word function names ---
-  # Each known name is parsed as a literal string (with space), then matched to `(`
   multiword_funcall =
     choice([
+      string("substring before") |> concat(word_boundary),
+      string("substring after") |> concat(word_boundary),
       string("string length") |> concat(word_boundary),
       string("starts with") |> concat(word_boundary),
       string("ends with") |> concat(word_boundary),
       string("upper case") |> concat(word_boundary),
       string("lower case") |> concat(word_boundary),
-      string("is null") |> concat(word_boundary)
+      string("is null") |> concat(word_boundary),
+      string("distinct values") |> concat(word_boundary),
+      string("list contains") |> concat(word_boundary),
+      string("index of") |> concat(word_boundary)
     ])
     |> ignore(ws)
     |> ignore(ascii_char([?(]))
@@ -137,6 +169,31 @@ defmodule RodarFeel.Parser do
     |> ignore(ascii_char([?]]))
     |> reduce(:build_list)
 
+  # --- Context literal ---
+  context_key =
+    choice([
+      string_literal,
+      identifier |> reduce(:wrap_key)
+    ])
+
+  context_entry =
+    context_key
+    |> ignore(ws)
+    |> ignore(ascii_char([?:]))
+    |> ignore(ws)
+    |> parsec(:expr)
+
+  context_literal =
+    ignore(ascii_char([?{]))
+    |> ignore(ws)
+    |> optional(
+      context_entry
+      |> repeat(ignore(ws) |> ignore(ascii_char([?,])) |> ignore(ws) |> concat(context_entry))
+    )
+    |> ignore(ws)
+    |> ignore(ascii_char([?}]))
+    |> reduce(:build_context)
+
   # --- If-then-else ---
   if_then_else =
     ignore(string("if"))
@@ -151,6 +208,65 @@ defmodule RodarFeel.Parser do
     |> ignore(ascii_string([?\s, ?\t], min: 1))
     |> parsec(:expr)
     |> reduce(:build_if)
+
+  # --- For-in-return ---
+  for_iteration =
+    identifier
+    |> ignore(ws)
+    |> ignore(string("in"))
+    |> ignore(ascii_string([?\s, ?\t], min: 1))
+    |> parsec(:expr)
+
+  for_expr =
+    ignore(string("for"))
+    |> ignore(ascii_string([?\s, ?\t], min: 1))
+    |> concat(for_iteration)
+    |> repeat(ignore(ws) |> ignore(ascii_char([?,])) |> ignore(ws) |> concat(for_iteration))
+    |> ignore(ws)
+    |> ignore(string("return"))
+    |> ignore(ascii_string([?\s, ?\t], min: 1))
+    |> parsec(:expr)
+    |> reduce(:build_for)
+
+  # --- Quantified expressions ---
+  quantified_iteration =
+    identifier
+    |> ignore(ws)
+    |> ignore(string("in"))
+    |> ignore(ascii_string([?\s, ?\t], min: 1))
+    |> parsec(:addition)
+
+  some_expr =
+    ignore(string("some"))
+    |> ignore(ascii_string([?\s, ?\t], min: 1))
+    |> concat(quantified_iteration)
+    |> repeat(
+      ignore(ws)
+      |> ignore(ascii_char([?,]))
+      |> ignore(ws)
+      |> concat(quantified_iteration)
+    )
+    |> ignore(ws)
+    |> ignore(string("satisfies"))
+    |> ignore(ascii_string([?\s, ?\t], min: 1))
+    |> parsec(:expr)
+    |> reduce(:build_some)
+
+  every_expr =
+    ignore(string("every"))
+    |> ignore(ascii_string([?\s, ?\t], min: 1))
+    |> concat(quantified_iteration)
+    |> repeat(
+      ignore(ws)
+      |> ignore(ascii_char([?,]))
+      |> ignore(ws)
+      |> concat(quantified_iteration)
+    )
+    |> ignore(ws)
+    |> ignore(string("satisfies"))
+    |> ignore(ascii_string([?\s, ?\t], min: 1))
+    |> parsec(:expr)
+    |> reduce(:build_every)
 
   # --- Parenthesized expression ---
   paren_expr =
@@ -189,9 +305,13 @@ defmodule RodarFeel.Parser do
       true_literal,
       false_literal,
       if_then_else,
+      for_expr,
+      some_expr,
+      every_expr,
       number_literal |> reduce(:wrap_literal),
       string_literal |> reduce(:wrap_literal),
       list_literal,
+      context_literal,
       multiword_funcall,
       singleword_funcall,
       paren_expr,
@@ -288,6 +408,16 @@ defmodule RodarFeel.Parser do
     parsec(:addition)
     |> optional(
       choice([
+        # `between` operator: x between low and high
+        ignore(ws)
+        |> ignore(string("between"))
+        |> ignore(ascii_string([?\s, ?\t], min: 1))
+        |> parsec(:addition)
+        |> ignore(ws)
+        |> ignore(string("and"))
+        |> ignore(ascii_string([?\s, ?\t], min: 1))
+        |> parsec(:addition)
+        |> reduce(:mark_between),
         # `in` operator with range or list/expr
         ignore(ws)
         |> ignore(string("in"))
@@ -390,6 +520,9 @@ defmodule RodarFeel.Parser do
   def wrap_literal([{:literal, _} = lit]), do: lit
 
   @doc false
+  def wrap_key([name]), do: {:literal, name}
+
+  @doc false
   def mark_bracket([item]), do: {:bracket_key, item}
 
   @doc false
@@ -435,9 +568,54 @@ defmodule RodarFeel.Parser do
   def build_list(items), do: {:list, items}
 
   @doc false
+  def build_context(pairs) do
+    entries =
+      pairs
+      |> Enum.chunk_every(2)
+      |> Enum.map(fn [{:literal, key}, value] -> {key, value} end)
+
+    {:context, entries}
+  end
+
+  @doc false
   def build_if([condition, then_expr, else_expr]) do
     {:if, condition, then_expr, else_expr}
   end
+
+  @doc false
+  def build_for(parts) do
+    {iterations, [body]} = build_iteration_pairs(parts)
+    {:for, iterations, body}
+  end
+
+  @doc false
+  def build_some(parts) do
+    {iterations, [condition]} = build_iteration_pairs(parts)
+    {:some, iterations, condition}
+  end
+
+  @doc false
+  def build_every(parts) do
+    {iterations, [condition]} = build_iteration_pairs(parts)
+    {:every, iterations, condition}
+  end
+
+  defp build_iteration_pairs(parts) do
+    {pairs, rest} = chunk_var_collection(parts, [])
+    {Enum.reverse(pairs), rest}
+  end
+
+  defp chunk_var_collection([var, collection | rest], acc) when is_binary(var) do
+    case rest do
+      [next_var | _] when is_binary(next_var) ->
+        chunk_var_collection(rest, [{var, collection} | acc])
+
+      _ ->
+        {[{var, collection} | acc], rest}
+    end
+  end
+
+  defp chunk_var_collection(rest, acc), do: {acc, rest}
 
   @doc false
   def build_multiword_funcall([name | args]), do: {:funcall, name, args}
@@ -458,9 +636,13 @@ defmodule RodarFeel.Parser do
   def mark_in(parts), do: {:in_rhs, List.last(parts)}
 
   @doc false
+  def mark_between([low, high]), do: {:between_rhs, low, high}
+
+  @doc false
   def build_comparison(parts) do
     case parts do
       [left, {:in_rhs, rhs}] -> {:in, left, rhs}
+      [left, {:between_rhs, low, high}] -> {:between, left, low, high}
       [left, op, right] -> {:binop, op, left, right}
       [single] -> single
     end

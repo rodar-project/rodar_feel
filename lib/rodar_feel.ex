@@ -48,4 +48,43 @@ defmodule RodarFeel do
       Evaluator.evaluate(ast, bindings)
     end
   end
+
+  @doc """
+  Parse and evaluate a DMN unary test against an input value.
+
+  Unary tests are expressions used in DMN decision table cells.
+  They are evaluated against an implicit input value.
+
+  ## Supported syntax
+
+  - `-` — wildcard, matches anything
+  - `< 100`, `>= 5`, `= "foo"` — comparison test
+  - `[1..5]` — inclusive range
+  - `(1..5)` — exclusive range
+  - `[1..5)`, `(1..5]` — half-open ranges
+  - `not(< 100)` — negated test
+  - `1, 2, 3` — disjunction (match any)
+  - `42` — equality test (plain value)
+
+  ## Examples
+
+      iex> RodarFeel.eval_unary("< 100", 50, %{})
+      {:ok, true}
+
+      iex> RodarFeel.eval_unary("[1..5]", 3, %{})
+      {:ok, true}
+
+      iex> RodarFeel.eval_unary("1, 2, 3", 2, %{})
+      {:ok, true}
+
+      iex> RodarFeel.eval_unary("-", :anything, %{})
+      {:ok, true}
+
+  """
+  @spec eval_unary(String.t(), any(), map()) :: {:ok, boolean()} | {:error, String.t()}
+  def eval_unary(test, input, bindings \\ %{}) do
+    with {:ok, ast} <- Parser.parse_unary(test) do
+      Evaluator.evaluate_unary(ast, input, bindings)
+    end
+  end
 end

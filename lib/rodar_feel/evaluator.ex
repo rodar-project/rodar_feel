@@ -49,6 +49,59 @@ defmodule RodarFeel.Evaluator do
     e -> {:error, "runtime error: #{Exception.message(e)}"}
   end
 
+  @doc """
+  Evaluate a unary test AST against an input value and bindings.
+
+  Returns `{:ok, boolean}` or `{:error, reason}`.
+  """
+  @spec evaluate_unary(tuple(), any(), map()) :: {:ok, boolean()} | {:error, String.t()}
+  def evaluate_unary(ast, input, bindings) when is_map(bindings) do
+    eval_unary_test(ast, input, bindings)
+  rescue
+    e -> {:error, "runtime error: #{Exception.message(e)}"}
+  end
+
+  defp eval_unary_test({:unary_wildcard}, _input, _bindings), do: {:ok, true}
+
+  defp eval_unary_test({:unary_cmp, op, expr_ast}, input, bindings) do
+    with {:ok, val} <- eval_node(expr_ast, bindings) do
+      eval_binop(op, input, val)
+    end
+  end
+
+  defp eval_unary_test({:unary_value, expr_ast}, input, bindings) do
+    with {:ok, val} <- eval_node(expr_ast, bindings) do
+      eval_binop(:==, input, val)
+    end
+  end
+
+  defp eval_unary_test({:unary_range, from_ast, to_ast, from_inc, to_inc}, input, bindings) do
+    with {:ok, from} <- eval_node(from_ast, bindings),
+         {:ok, to} <- eval_node(to_ast, bindings),
+         {:ok, from_ok} <- eval_binop(if(from_inc, do: :>=, else: :>), input, from),
+         {:ok, to_ok} <- eval_binop(if(to_inc, do: :<=, else: :<), input, to) do
+      {:ok, from_ok and to_ok}
+    end
+  end
+
+  defp eval_unary_test({:unary_not, inner_ast}, input, bindings) do
+    with {:ok, result} <- eval_unary_test(inner_ast, input, bindings) do
+      {:ok, not result}
+    end
+  end
+
+  defp eval_unary_test({:unary_disjunction, tests}, input, bindings) do
+    eval_unary_disjunction(tests, input, bindings)
+  end
+
+  defp eval_unary_disjunction([], _input, _bindings), do: {:ok, false}
+
+  defp eval_unary_disjunction([test | rest], input, bindings) do
+    with {:ok, result} <- eval_unary_test(test, input, bindings) do
+      if result, do: {:ok, true}, else: eval_unary_disjunction(rest, input, bindings)
+    end
+  end
+
   # --- Literals ---
   defp eval_node({:literal, value}, _bindings), do: {:ok, value}
 

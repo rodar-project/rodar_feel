@@ -478,6 +478,86 @@ defmodule RodarFeel.Parser do
 
   defparsec(:parse_expr, parsec(:expr) |> ignore(ws) |> eos())
 
+  # --- Unary test grammar ---
+  # Separate entry point for DMN decision table cells.
+  # Tests are evaluated against an implicit input value.
+
+  # Wildcard: `-` matches anything
+  unary_wildcard =
+    string("-")
+    |> concat(lookahead_not(ascii_char([?0..?9])))
+    |> replace({:unary_wildcard})
+
+  # Comparison test: `< 100`, `>= 5`, `= "foo"`, `!= null`
+  unary_cmp =
+    choice([
+      string("!=") |> replace(:!=),
+      string("<=") |> replace(:<=),
+      string(">=") |> replace(:>=),
+      string("<") |> replace(:<),
+      string(">") |> replace(:>),
+      string("=") |> replace(:==)
+    ])
+    |> ignore(ws)
+    |> parsec(:expr)
+    |> reduce(:build_unary_cmp)
+
+  # Range test with inclusive/exclusive endpoints:
+  # `[1..5]`, `(1..5)`, `[1..5)`, `(1..5]`
+  unary_range =
+    choice([
+      ascii_char([?[]) |> replace(:inclusive),
+      ascii_char([?(]) |> replace(:exclusive)
+    ])
+    |> ignore(ws)
+    |> parsec(:expr)
+    |> ignore(ws)
+    |> ignore(string(".."))
+    |> ignore(ws)
+    |> parsec(:expr)
+    |> ignore(ws)
+    |> choice([
+      ascii_char([?]]) |> replace(:inclusive),
+      ascii_char([?)]) |> replace(:exclusive)
+    ])
+    |> reduce(:build_unary_range)
+
+  # Negated test: `not(< 100)`, `not([1..5])`
+  unary_not =
+    ignore(string("not"))
+    |> ignore(ws)
+    |> ignore(ascii_char([?(]))
+    |> ignore(ws)
+    |> parsec(:single_unary_test)
+    |> ignore(ws)
+    |> ignore(ascii_char([?)]))
+    |> reduce(:build_unary_not)
+
+  # A single unary test (not a disjunction)
+  defcombinatorp(
+    :single_unary_test,
+    choice([
+      unary_wildcard,
+      unary_not,
+      unary_range,
+      unary_cmp,
+      parsec(:expr) |> reduce(:build_unary_value)
+    ])
+  )
+
+  # Disjunction: `1, 2, 3` — comma-separated, match any
+  unary_test_list =
+    parsec(:single_unary_test)
+    |> repeat(
+      ignore(ws)
+      |> ignore(ascii_char([?,]))
+      |> ignore(ws)
+      |> parsec(:single_unary_test)
+    )
+    |> reduce(:build_unary_disjunction)
+
+  defparsec(:parse_unary_test, ignore(ws) |> concat(unary_test_list) |> ignore(ws) |> eos())
+
   # --- Public API ---
 
   @doc """
@@ -700,5 +780,55 @@ defmodule RodarFeel.Parser do
 
   def build_or([first | rest]) do
     Enum.reduce(rest, first, fn right, acc -> {:binop, :or, acc, right} end)
+  end
+
+  # --- Unary test AST builders ---
+
+  @doc false
+  def build_unary_cmp([op, expr]), do: {:unary_cmp, op, expr}
+
+  @doc false
+  def build_unary_range([from_type, from_expr, to_expr, to_type]) do
+    {:unary_range, from_expr, to_expr, from_type == :inclusive, to_type == :inclusive}
+  end
+
+  @doc false
+  def build_unary_not([inner]), do: {:unary_not, inner}
+
+  @doc false
+  def build_unary_value([expr]), do: {:unary_value, expr}
+
+  @doc false
+  def build_unary_disjunction([single]), do: single
+  def build_unary_disjunction(tests), do: {:unary_disjunction, tests}
+
+  # --- Unary test public parse API ---
+
+  @doc """
+  Parse a DMN unary test string into an AST.
+
+  Returns `{:ok, ast}` on success or `{:error, message}` on failure.
+
+  ## Examples
+
+      iex> RodarFeel.Parser.parse_unary("< 100")
+      {:ok, {:unary_cmp, :<, {:literal, 100}}}
+
+      iex> RodarFeel.Parser.parse_unary("-")
+      {:ok, {:unary_wildcard}}
+
+  """
+  @spec parse_unary(String.t()) :: {:ok, tuple()} | {:error, String.t()}
+  def parse_unary(input) when is_binary(input) do
+    case parse_unary_test(String.trim(input)) do
+      {:ok, [ast], "", _, _, _} ->
+        {:ok, ast}
+
+      {:ok, _, rest, _, _, _} ->
+        {:error, "unexpected input: #{inspect(rest)}"}
+
+      {:error, message, rest, _, _, _} ->
+        {:error, "parse error near #{inspect(String.slice(rest, 0..19))}: #{message}"}
+    end
   end
 end

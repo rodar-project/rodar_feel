@@ -46,8 +46,9 @@ defmodule RodarFeel.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: [:dev, :test], runtime: false},
+      {:igniter, "~> 0.6", only: [:dev, :test]},
       {:excoveralls, "~> 0.18", only: [:dev, :test], runtime: false},
-      {:rodar_release, "~> 1.0", only: :dev, runtime: false}
+      {:rodar_release, "~> 1.2", only: :dev, runtime: false}
     ]
   end
 end
